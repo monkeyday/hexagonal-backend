@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        if: ${{ env.ACT != 'true' }}
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('.golangci.yml') }}
+          restore-keys: golangci-lint-${{ runner.os }}-
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 golangci-lint-2.12.2-linux-amd64/golangci-lint
+      - run: golangci-lint run
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod verify
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate RSA key pair
+        run: |
+          mkdir -p ci-keys
+          openssl genrsa -out ci-keys/private_key.pem 2048
+          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
+
+      - name: Write CI .env
+        run: |
+          cat > ci.env << EOF
+          PORT=:9876
+          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
+          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
+          JWT_KID=ci
+          JWT_ISSUER=http://127.0.0.1:9876
+          REPOSITORY_USED=file
+          FILE_DIR=$GITHUB_WORKSPACE/tmp
+          USER_FILE_PATH=user.json
+          OAUTH_CLIENT_REDIRECT_WHITELIST=my_client http://localhost:3000/callback
+          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
+          EOF
+
+      - name: Build server
+        run: go build -o bin/auth ./cmd/auth
+
+      - name: Run e2e tests
+        env:
+          ENV_PATH: ${{ github.workspace }}/ci.env
+        run: |
+          ./bin/auth > /tmp/server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          bash e2e/test_auth.sh
+
+      - name: Show server log
+        if: always()
+        run: cat /tmp/server.log || true
+
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+      - run: govulncheck ./...
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install go-licenses
+        run: go install github.com/google/go-licenses@v1.6.0
+      - run: go-licenses check ./... --disallowed_types=restricted,forbidden
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+      - name: Scan for secrets
+        run: gitleaks detect --source . --redact
