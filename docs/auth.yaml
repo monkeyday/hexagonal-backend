@@ -1,0 +1,996 @@
+openapi: 3.1.0
+info:
+  title: Auth Service
+  description: |
+    OIDC-compliant authentication server supporting the Authorization Code,
+    Password, and Refresh Token grant flows.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:9876
+    description: Local development
+
+# ─── Security scheme ──────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ─── Reusable schemas ───────────────────────────────────────────────────────
+  schemas:
+
+    ErrorEnvelope:
+      type: object
+      required: [msg, err_code]
+      properties:
+        msg:
+          type: string
+          example: invalid token
+        err_code:
+          type: integer
+          example: 10002
+
+    # ── Token response (shared by password grant, code exchange, refresh) ─────
+    TokenResponse:
+      type: object
+      properties:
+        scope:
+          type: string
+          example: openid email profile phone
+        token_type:
+          type: string
+          example: Bearer
+        access_token:
+          type: string
+        id_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 900
+
+    # ── Userinfo (OIDC Core 1.0 §5.1) ─────────────────────────────────────────
+    UserInfoResponse:
+      type: object
+      properties:
+        sub:
+          type: string
+          format: uuid
+        preferred_username:
+          type: string
+        nickname:
+          type: string
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+        updated_at:
+          type: integer
+          format: int64
+          description: Unix timestamp of last profile update.
+
+    # ── Introspection (RFC 7662) ───────────────────────────────────────────────
+    IntrospectResponse:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+        sub:
+          type: string
+        iss:
+          type: string
+        aud:
+          type: array
+          items:
+            type: string
+        exp:
+          type: integer
+          format: int64
+        iat:
+          type: integer
+          format: int64
+        jti:
+          type: string
+        scope:
+          type: string
+          example: openid email profile
+        token_type:
+          type: string
+          example: Bearer
+
+    # ── Discovery (OIDC Discovery 1.0 §3) ─────────────────────────────────────
+    DiscoveryResponse:
+      type: object
+      properties:
+        issuer:
+          type: string
+        authorization_endpoint:
+          type: string
+        token_endpoint:
+          type: string
+        userinfo_endpoint:
+          type: string
+        jwks_uri:
+          type: string
+        revocation_endpoint:
+          type: string
+        end_session_endpoint:
+          type: string
+        introspection_endpoint:
+          type: string
+        response_types_supported:
+          type: array
+          items:
+            type: string
+        subject_types_supported:
+          type: array
+          items:
+            type: string
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+        scopes_supported:
+          type: array
+          items:
+            type: string
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+            enum: [S256]
+        claims_supported:
+          type: array
+          items:
+            type: string
+
+    # ── JWKS ──────────────────────────────────────────────────────────────────
+    JwksResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            properties:
+              kty: { type: string, example: RSA }
+              e:   { type: string }
+              n:   { type: string }
+              alg: { type: string, example: RS256 }
+              use: { type: string, example: sig }
+              kid: { type: string }
+
+    # ── Profile update ─────────────────────────────────────────────────────────
+    UpdateProfileResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        nickname:
+          type: string
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+
+    # ── Sign-up ────────────────────────────────────────────────────────────────
+    CreateUserResponse:
+      type: object
+      properties:
+        username:
+          type: string
+        nickname:
+          type: string
+        email:
+          type: string
+          format: email
+
+  # ─── Reusable responses ─────────────────────────────────────────────────────
+  responses:
+    Unauthorized:
+      description: Invalid or missing token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            msg: invalid token
+            err_code: 10002
+
+    BadRequest:
+      description: Validation error or unsupported parameter.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              msg:
+                type: string
+                example: too many requests
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Sign-in page ─────────────────────────────────────────────────────────────
+  /sign-in:
+    get:
+      summary: Sign-in HTML page
+      tags: [UI]
+      responses:
+        '200':
+          description: Returns the sign-in HTML form.
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      summary: Authenticate and obtain an authorization code
+      description: |
+        Validates email/password against the server-side session created by
+        `GET /authorize`, issues a single-use authorization code, and redirects
+        to `redirect_uri?code=<code>&state=<state>`.
+
+        Requires the `auth_session` cookie set by `GET /authorize`.
+        Rate-limited to 5 req/s with a burst of 10 per client IP.
+      tags: [Auth Code Flow]
+      parameters:
+        - in: cookie
+          name: auth_session
+          required: true
+          schema:
+            type: string
+          description: Session ID set by `GET /authorize`.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [email, password, csrf_token]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                csrf_token:
+                  type: string
+                  description: CSRF token embedded in the sign-in HTML form.
+      responses:
+        '303':
+          description: See `redirect_uri` with `code` and optional `state`.
+          headers:
+            Location:
+              schema:
+                type: string
+              example: https://app.example.com/callback?code=abc123&state=xyz
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ── Sign-up ───────────────────────────────────────────────────────────────────
+  /sign-up:
+    get:
+      summary: Sign-up HTML page
+      tags: [UI]
+      responses:
+        '200':
+          description: Returns the sign-up HTML form.
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      summary: Register a new user
+      tags: [Account]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [username, nickname, email, password]
+              properties:
+                username:
+                  type: string
+                nickname:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUserResponse'
+        '409':
+          description: Email already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: email already exists
+                err_code: 10016
+
+  # ── Authorize ─────────────────────────────────────────────────────────────────
+  /authorize:
+    get:
+      summary: Initiate OIDC authorization
+      description: |
+        Validates OIDC parameters, creates a server-side session, and redirects
+        to `/sign-in`. Sets an `auth_session` cookie the sign-in form must carry
+        back. Only `response_type=code` is supported.
+      tags: [Auth Code Flow]
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+            example: openid email profile
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: nonce
+          in: query
+          schema:
+            type: string
+        - name: code_challenge
+          in: query
+          schema:
+            type: string
+            description: PKCE challenge (base64url(SHA256(code_verifier))). Length must be 43.
+        - name: code_challenge_method
+          in: query
+          schema:
+            type: string
+            enum: [S256]
+            description: Required when `code_challenge` is present.
+      responses:
+        '302':
+          description: Redirect to `/sign-in` with `auth_session` cookie set.
+          headers:
+            Location:
+              schema:
+                type: string
+              example: /sign-in
+            Set-Cookie:
+              schema:
+                type: string
+              example: auth_session=<session_id>; HttpOnly; SameSite=Lax
+        '400':
+          description: Invalid `redirect_uri` or unsupported `response_type`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: unsupported response_type
+                err_code: 10020
+
+  # ── Token ─────────────────────────────────────────────────────────────────────
+  /token:
+    post:
+      summary: Issue tokens
+      description: |
+        Dispatches to the appropriate grant handler based on `grant_type`:
+
+        | `grant_type`          | Handler                         |
+        |-----------------------|---------------------------------|
+        | `authorization_code`  | Exchange auth code for tokens   |
+        | `refresh_token`       | Rotate access + refresh tokens  |
+        | `password`            | Credential-based token issuance |
+        | *(anything else)*     | 400 unsupported grant type      |
+
+        Rate-limited to 5 req/s with a burst of 10 per client IP.
+      tags: [Tokens]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - title: Authorization Code
+                  type: object
+                  required: [grant_type, code, client_id, redirect_uri]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [authorization_code]
+                    code:
+                      type: string
+                    client_id:
+                      type: string
+                    redirect_uri:
+                      type: string
+                      format: uri
+                    code_verifier:
+                      type: string
+                      description: PKCE verifier. Required if `code_challenge` was sent in the authorization request.
+                    expire_secs:
+                      type: integer
+                      default: 900
+                - title: Refresh Token
+                  type: object
+                  required: [grant_type, client_id, refresh_token]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [refresh_token]
+                    client_id:
+                      type: string
+                    refresh_token:
+                      type: string
+                    expire_secs:
+                      type: integer
+                      default: 900
+                - title: Password
+                  type: object
+                  required: [grant_type, email, password]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [password]
+                    email:
+                      type: string
+                      format: email
+                    password:
+                      type: string
+                      format: password
+                    client_id:
+                      type: string
+                    nonce:
+                      type: string
+                    expire_secs:
+                      type: integer
+                      default: 900
+          application/x-www-form-urlencoded:
+            schema:
+              oneOf:
+                - title: Authorization Code
+                  type: object
+                  required: [grant_type, code, client_id, redirect_uri]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [authorization_code]
+                    code:
+                      type: string
+                    client_id:
+                      type: string
+                    redirect_uri:
+                      type: string
+                      format: uri
+                    code_verifier:
+                      type: string
+                - title: Refresh Token
+                  type: object
+                  required: [grant_type, client_id, refresh_token]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [refresh_token]
+                    client_id:
+                      type: string
+                    refresh_token:
+                      type: string
+                - title: Password
+                  type: object
+                  required: [grant_type, email, password]
+                  properties:
+                    grant_type:
+                      type: string
+                      enum: [password]
+                    email:
+                      type: string
+                      format: email
+                    password:
+                      type: string
+                      format: password
+                    client_id:
+                      type: string
+                    nonce:
+                      type: string
+      responses:
+        '200':
+          description: Tokens issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Unsupported grant type or missing parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: unsupported grant type
+                err_code: 10021
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ── Userinfo ──────────────────────────────────────────────────────────────────
+  /userinfo:
+    get:
+      summary: Get authenticated user's profile (OIDC §5.3)
+      description: Returns OIDC Core 1.0 §5.1 standard claims for the token holder.
+      tags: [OIDC]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User claims.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── OIDC Discovery ────────────────────────────────────────────────────────────
+  /.well-known/openid-configuration:
+    get:
+      summary: OIDC Provider Metadata (Discovery 1.0 §3)
+      tags: [OIDC]
+      responses:
+        '200':
+          description: Provider metadata document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryResponse'
+
+  # ── JWKS ──────────────────────────────────────────────────────────────────────
+  /.well-known/jwks.json:
+    get:
+      summary: JSON Web Key Set
+      description: RS256 public keys used to verify JWTs issued by this server.
+      tags: [OIDC]
+      responses:
+        '200':
+          description: JWKS document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwksResponse'
+
+  # ── OIDC group ────────────────────────────────────────────────────────────────
+  /oidc/me:
+    get:
+      summary: Get profile (alias for /userinfo)
+      tags: [OIDC]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User claims.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /oidc/revoke:
+    post:
+      summary: Revoke a token (RFC 7009)
+      description: |
+        Invalidates an access or refresh token. Unknown tokens are silently
+        accepted per RFC 7009 §2.2.
+      tags: [OIDC]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                token_type_hint:
+                  type: string
+                  enum: [access_token, refresh_token]
+      responses:
+        '200':
+          description: Token revoked (or was already invalid).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /oidc/introspect:
+    post:
+      summary: Introspect a token (RFC 7662)
+      description: |
+        Returns the active state and claims of a token.
+        - Access tokens are validated as JWTs and checked against the JTI blacklist cache.
+        - Opaque refresh tokens always return `active: false`; use `/oidc/revoke` to explicitly revoke them.
+      tags: [OIDC]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                token_type_hint:
+                  type: string
+                  enum: [access_token, refresh_token]
+      responses:
+        '200':
+          description: Introspection result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntrospectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /oidc/logout:
+    get:
+      summary: End session (OIDC Session Management)
+      description: |
+        Revokes the user's tokens (best-effort, identified by `id_token_hint`)
+        and redirects to `post_logout_redirect_uri`.
+      tags: [OIDC]
+      parameters:
+        - name: id_token_hint
+          in: query
+          schema:
+            type: string
+          description: ID token previously issued to the client.
+        - name: post_logout_redirect_uri
+          in: query
+          schema:
+            type: string
+            format: uri
+          description: URI to redirect to after logout.
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to `post_logout_redirect_uri` (only when URI is present and allowlisted).
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+              description: Clears the `refresh_token` cookie (`Max-Age=-1`).
+        '200':
+          description: No redirect URI provided; returns an empty JSON object. The `refresh_token` cookie is cleared via `Set-Cookie`.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Clears the `refresh_token` cookie (`Max-Age=-1`).
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Keycloak-compatible aliases ───────────────────────────────────────────────
+  # These paths mirror the canonical endpoints above for clients configured
+  # against a Keycloak-style base URL.
+  /protocol/openid-connect/auth:
+    get:
+      summary: Initiate OIDC authorization (Keycloak alias for GET /authorize)
+      tags: [Auth Code Flow]
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: nonce
+          in: query
+          schema:
+            type: string
+        - name: code_challenge
+          in: query
+          schema:
+            type: string
+        - name: code_challenge_method
+          in: query
+          schema:
+            type: string
+            enum: [S256]
+      responses:
+        '302':
+          description: Redirect to `/sign-in`.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /protocol/openid-connect/certs:
+    get:
+      summary: JSON Web Key Set (Keycloak alias for GET /.well-known/jwks.json)
+      tags: [OIDC]
+      responses:
+        '200':
+          description: JWKS document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwksResponse'
+
+  /protocol/openid-connect/token:
+    post:
+      summary: Issue tokens (Keycloak alias for POST /token)
+      tags: [Tokens]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code, refresh_token, password]
+      responses:
+        '200':
+          description: Tokens issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /protocol/openid-connect/userinfo:
+    get:
+      summary: Get authenticated user's profile (Keycloak alias for GET /userinfo)
+      tags: [OIDC]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User claims.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfoResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── API v3 ────────────────────────────────────────────────────────────────────
+  /api/v3/update-profile:
+    post:
+      summary: Update user profile
+      tags: [Account]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                nickname:
+                  type: string
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Profile updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: New email already taken by another account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: email already exists
+                err_code: 10016
+
+  # ── Password reset ───────────────────────────────────────────────────────────
+  /forgot-password:
+    post:
+      summary: Request a password reset email
+      description: |
+        Generates a short-lived reset token and emails it to the user.
+        Always returns `200` to avoid revealing whether the email exists.
+      tags: [Account]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Request accepted (email sent if account exists).
+
+  /reset-password:
+    post:
+      summary: Reset password using a token
+      description: |
+        Validates the raw reset token, updates the password, and revokes all
+        existing refresh tokens for the user.
+      tags: [Account]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                  description: Raw reset token received by email.
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Password updated successfully.
+        '400':
+          description: Weak password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: password too weak
+                err_code: 10024
+        '401':
+          description: Reset token has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: password reset token has expired
+                err_code: 10022
+        '404':
+          description: Reset token not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                msg: password reset token not found
+                err_code: 10023
+
+  # ── Metrics ───────────────────────────────────────────────────────────────────
+  /debug/vars:
+    get:
+      summary: Runtime metrics (expvar)
+      description: |
+        Exposes Go expvar counters including:
+        - `auth_failed_logins_total`
+        - `auth_tokens_issued_total`
+        - `auth_token_revocations_total`
+      tags: [Observability]
+      responses:
+        '200':
+          description: JSON map of counter names to values.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+
+# ─── Tags ─────────────────────────────────────────────────────────────────────
+tags:
+  - name: UI
+    description: Browser-facing HTML endpoints.
+  - name: Auth Code Flow
+    description: OIDC Authorization Code grant (RFC 6749 §4.1).
+  - name: Tokens
+    description: Token endpoint — all grant types.
+  - name: OIDC
+    description: Protected OIDC endpoints (userinfo, revocation, introspection, logout).
+  - name: Account
+    description: User registration and profile management.
+  - name: Observability
+    description: Runtime metrics and diagnostics.
