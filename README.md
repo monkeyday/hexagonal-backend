@@ -83,8 +83,27 @@ This project follows hexagonal architecture (ports & adapters). The application 
          handler/web/              modules/auth/adapter/out/
 ```
 
+![Hexagonal architecture module](docs/hexagonal.png)
+
 Sequence diagram: [`docs/oidc-flow-current.mermaid`](docs/oidc-flow-current.mermaid)  
 OpenAPI spec: [`docs/auth.yaml`](docs/auth.yaml)
+
+<details>
+<summary>Diagrams: composition root, Authorization Code Flow, token refresh</summary>
+
+The composition root (`cmd/auth/main.go`) loads config, builds cross-cutting infrastructure, composes the module, and wires it into the web handler:
+
+![Composition root](docs/composition.png)
+
+Authorization Code Flow:
+
+![Authorization Code Flow](docs/login.png)
+
+Token refresh flow:
+
+![Token refresh flow](docs/refresh.png)
+
+</details>
 
 ---
 

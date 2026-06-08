@@ -21,7 +21,6 @@ CLAUDE.md
 
 # Internal docs
 docs/*.md
-docs/*.mermaid
 
 # OS
 .DS_Store

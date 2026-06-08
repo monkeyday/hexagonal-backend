@@ -1,0 +1,131 @@
+sequenceDiagram
+    participant F as Frontend App
+    participant B as Backend Server
+    participant O as OIDC Server
+
+    F->>B: Click Login
+    B->>B: Generate random state & nonce
+    B->>B: Store state & nonce in pending session
+    B->>F: 302 Redirect → OIDC /authorize?...&state=xxx&nonce=yyy
+
+    Note over F,B: Browser navigates to OIDC Server directly<br/>No server-to-server call here
+
+    F->>O: GET /authorize?client_id=xxx&redirect_uri=xxx&response_type=code&scope=openid...&state=xxx&nonce=yyy
+    O->>O: Validate client_id & redirect_uri against allowlist
+    alt redirect_uri invalid
+        O->>F: 400 Bad Request (must not redirect — RFC 6749 §4.1.2.1)
+    end
+    O->>O: Create OIDC Session (AuthorizeRequest)
+    O->>O: Store state, nonce & generate csrf_token in session
+    O->>O: Save session to cache (TTL: 10 min)
+    O->>F: 302 Redirect /sign-in + Set-Cookie auth_session=<session_id> (HttpOnly, SameSite=Lax)
+
+    Note over O,F: SameSite=Lax required — redirect is cross-origin
+
+    F->>O: GET /sign-in
+    O->>O: Read OIDC Session via auth_session cookie
+    O->>F: Sign-in Page (with hidden csrf_token input)
+
+    F->>O: POST /sign-in (email + password + csrf_token)
+    O->>O: Atomically read & delete OIDC Session (GetAndDelete)
+    O->>O: Validate csrf_token vs session (constant-time compare)
+    alt session not found or csrf_token mismatch
+        O->>F: 400 Bad Request (invalid_session)
+    end
+    O->>O: Look up user by email
+    O->>O: Verify password hash
+    alt credentials invalid
+        O->>O: Increment FailedAttempts, re-save session
+        alt FailedAttempts >= 3
+            O->>F: 400 Bad Request (max_login_attempts_exceeded)
+        end
+        O->>F: 401 Unauthorized (invalid_email_or_password)
+    end
+    O->>O: Generate Auth Code (TTL: 5 min)
+    O->>O: Save Auth Code with nonce & scope in cache
+    O->>F: 303 Redirect (See Other) redirect_uri?code=zzz&state=xxx + Clear auth_session cookie (MaxAge=-1)
+
+    F->>B: GET /callback?code=zzz&state=xxx
+    B->>B: Validate state matches pending session
+    alt state missing or mismatch
+        B->>F: 400 Bad Request (state mismatch)
+    end
+
+    Note over B,O: POST /token is server-to-server<br/>Backend calls OIDC Server directly
+
+    B->>O: POST /token (grant_type=authorization_code + code + client_id + redirect_uri)
+    O->>O: Consume Auth Code (one-time use, GetAndDelete)
+    alt code not found, already consumed, or expired
+        O->>B: 400 Bad Request (auth code not found)
+    end
+    O->>O: Validate client_id and redirect_uri match Auth Code
+    alt client_id or redirect_uri mismatch
+        O->>B: 400 Bad Request (invalid_grant)
+    end
+    Note over O,B: This test harness sends no code_challenge,<br/>so this branch is dormant here — shown for completeness<br/>since the server validates PKCE when a client provides it
+    alt code_challenge present on Auth Code
+        O->>O: Hash code_verifier (S256) & compare with stored code_challenge
+        alt code_verifier missing or mismatch
+            O->>B: 400 Bad Request (invalid_grant)
+        end
+    end
+    O->>O: Generate Access Token + ID Token (with nonce claim) + Refresh Token
+    O->>O: Save Refresh Token server-side (for future revocation)
+    O->>B: Access Token + ID Token + Refresh Token (JSON)
+
+    B->>B: Decode ID Token payload
+    B->>B: Validate nonce claim matches pending session
+    alt nonce mismatch
+        B->>F: 400 Bad Request (nonce mismatch)
+    end
+    B->>B: Clear pending session
+    B->>B: Store tokens in session
+    B->>F: 302 Redirect to home
+
+    Note over F,O: --- Token Refresh (same /token endpoint, grant_type=refresh_token) ---
+
+    F->>B: API call with expired access token
+    B->>O: POST /token (grant_type=refresh_token + refresh_token + client_id)
+    O->>O: Hash refresh_token (SHA256), look up by hash
+    alt not found, revoked, or expired
+        O->>B: 401 Unauthorized (invalid_refresh_token)
+    end
+    O->>O: Look up user, reject if AuthenticatedAt predates SessionsInvalidatedAt
+    alt session invalidated
+        O->>B: 401 Unauthorized (invalid_refresh_token)
+    end
+    O->>O: Generate new Access Token + ID Token + Refresh Token
+    O->>O: Revoke old Refresh Token (rotation) & save new one — preserves AuthenticatedAt & DeviceID
+    O->>B: New Access Token + ID Token + Refresh Token (JSON)
+    B->>B: Store new tokens in session
+
+    Note over O: Refresh Token TTL: 30 days
+
+    Note over F,O: --- Token Revocation (POST /oidc/revoke, RFC 7009) ---
+
+    F->>B: Click "revoke session" / sign out of one device
+    B->>O: POST /oidc/revoke (Bearer access token) — token + token_type_hint?
+    O->>O: Try as Refresh Token - hash & look up, verify caller owns it (UserID == CallerID)
+    alt found & owned
+        O->>O: Mark RevokedAt (one-time revoke)
+    else not a refresh token, or not owned
+        O->>O: Parse as Access Token JWT, extract jti & subject
+        alt jti present & subject == CallerID
+            O->>O: Blacklist jti in cache (TTL = token's remaining expiry)
+        end
+    end
+    O->>B: 200 OK, empty body (silent no-op on unknown/foreign/wrong-owner tokens per RFC 7009 §2.2 — storage/cache errors still surface as failures)
+
+    Note over F,O: --- Logout (GET /oidc/logout) ---
+
+    F->>O: GET /oidc/logout?id_token_hint=...&post_logout_redirect_uri=...
+    O->>O: Resolve UserID (priority: access token subject → id_token_hint subject → refresh_token cookie)
+    O->>O: Blacklist Access Token jti in cache (if present & not expired)
+    O->>O: Revoke ALL Refresh Tokens for UserID (RevokeAllForUser)
+    alt post_logout_redirect_uri provided & in allowlist
+        O->>F: 302 Redirect to post_logout_redirect_uri + Clear refresh_token cookie (MaxAge=-1)
+    else
+        O->>F: 200 OK + Clear refresh_token cookie (MaxAge=-1)
+    end
+
+    Note over O: Always succeeds — best-effort cleanup, never fails on missing/invalid credentials
