@@ -1,0 +1,132 @@
+@baseUrl = http://localhost:9876
+@accessToken =
+@refreshToken =
+@clientId = my_client
+
+### OIDC Discovery
+GET {{baseUrl}}/.well-known/openid-configuration
+
+### OIDC JWKS (public keys)
+GET {{baseUrl}}/.well-known/jwks.json
+
+###
+
+### Sign up
+POST {{baseUrl}}/sign-up
+Content-Type: application/x-www-form-urlencoded
+
+username=monkeyday&nickname=monkeyday&email=monkeyday@example.com&password=Secret!234
+
+### Authorize (validate OIDC request)
+GET {{baseUrl}}/authorize?response_type=code&client_id={{clientId}}&redirect_uri=http://localhost:3000/callback&scope=openid%20email%20profile&state=xyz&nonce=abc123
+
+### Sign-in page (HTML)
+GET {{baseUrl}}/sign-in
+Content-Type: application/x-www-form-urlencoded
+
+### Get token (password grant)
+POST {{baseUrl}}/token
+Content-Type: application/json
+X-Forwarded-For: 1.2.3.4
+
+{
+  "grant_type": "password",
+  "email": "monkeyday@example.com",
+  "password": "Secret!234",
+  "expire_secs": 86400
+}
+
+> {%
+  client.global.set("accessToken", response.body.access_token);
+  client.global.set("refreshToken", response.body.refresh_token);
+%}
+
+### Refresh token
+POST {{baseUrl}}/token
+Content-Type: application/json
+
+{
+  "grant_type": "refresh_token",
+  "client_id": "{{clientId}}",
+  "refresh_token": "{{refreshToken}}"
+}
+
+> {%
+  client.global.set("accessToken", response.body.access_token);
+  client.global.set("refreshToken", response.body.refresh_token);
+%}
+
+###
+
+### Create authorization code (OIDC login)
+POST {{baseUrl}}/sign-in
+Content-Type: application/x-www-form-urlencoded
+X-Forwarded-For: 1.2.3.4
+
+email=alice@example.com&password=secret1234&response_type=code&client_id={{clientId}}&redirect_uri=http://localhost:3000/callback&scope=openid+email+profile&state=xyz&nonce=abc123
+
+### Exchange authorization code for tokens
+POST {{baseUrl}}/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code=<replace_with_code>&client_id={{clientId}}&redirect_uri=http://localhost:3000/callback
+
+###
+
+### Userinfo — OIDC standard endpoint (requires auth)
+GET {{baseUrl}}/userinfo
+Authorization: Bearer {{accessToken}}
+
+### Get profile — alias (requires auth)
+GET {{baseUrl}}/oidc/me
+Authorization: Bearer {{accessToken}}
+
+### Revoke token (requires auth)
+POST {{baseUrl}}/oidc/revoke
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "token": "{{accessToken}}",
+  "token_type_hint": "access_token"
+}
+
+### Introspect token (requires auth)
+POST {{baseUrl}}/oidc/introspect
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "token": "{{accessToken}}",
+  "token_type_hint": "access_token"
+}
+
+### Forgot password (sends reset email; always returns 200 to avoid info leakage)
+POST {{baseUrl}}/forgot-password
+Content-Type: application/json
+
+{
+  "email": "monkeyday@example.com"
+}
+
+### Reset password (consume the token from the reset email)
+POST {{baseUrl}}/reset-password
+Content-Type: application/json
+
+{
+  "token": "SQHeRSxVJnydR4D_ntPCyYQn214BXGO2yznaOP8QSvk",
+  "password": "NewSecret!234"
+}
+
+### Logout (OIDC end-session, redirects to post_logout_redirect_uri)
+GET {{baseUrl}}/oidc/logout?id_token_hint={{accessToken}}&post_logout_redirect_uri=http://localhost:3000&state=xyz
+
+### Update profile (requires auth)
+POST {{baseUrl}}/api/v3/update-profile
+Authorization: Bearer {{accessToken}}
+Content-Type: application/x-www-form-urlencoded
+
+user_id=<replace_with_user_id>&access_token={{accessToken}}&nickname=AliceUpdated&email=alice_new@example.com
+
+### Metrics
+GET {{baseUrl}}/debug/vars
