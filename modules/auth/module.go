@@ -97,7 +97,9 @@ func httpStatusMapper(code coreerror.ErrCode) int {
 	case autherrors.InvalidArguments,
 		autherrors.WeakPassword,
 		autherrors.UnsupportedResponseType,
-		autherrors.UnsupportedGrantType:
+		autherrors.UnsupportedGrantType,
+		autherrors.MaxLoginAttemptsExceeded,
+		autherrors.InvalidAuthRequest:
 		return http.StatusBadRequest
 	case autherrors.InvalidToken,
 		autherrors.InvalidRefreshToken,
