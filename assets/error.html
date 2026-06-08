@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ .title }}</title>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Caveat+Brush&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --c-ink:      #1a1a1a;
+    --c-accent:   #f0a500;
+    --c-bg:       #ffffff;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--c-bg);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Caveat', cursive;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(180,200,240,0.15) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(180,200,240,0.15) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+  }
+
+  .card {
+    position: relative;
+    width: 360px;
+    padding: 48px 44px 52px;
+    background: var(--c-bg);
+    box-shadow: 6px 6px 0 var(--c-ink);
+    animation: fadeUp 0.5s ease both;
+    transform: rotate(-0.5deg);
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px) rotate(-0.5deg); }
+    to   { opacity: 1; transform: translateY(0) rotate(-0.5deg); }
+  }
+
+  .holes {
+    position: absolute;
+    left: -14px;
+    top: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+    pointer-events: none;
+  }
+  .hole {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--c-bg);
+    border: 2px solid var(--c-ink);
+    margin-left: -6px;
+  }
+
+  .corner {
+    position: absolute;
+    font-size: 20px;
+    opacity: 0.35;
+    color: var(--c-ink);
+  }
+  .corner.tl { top: 10px; left: 12px; transform: rotate(-20deg); }
+  .corner.br { bottom: 12px; right: 14px; transform: rotate(15deg); }
+
+  .doodle-star {
+    position: absolute;
+    top: -22px; right: 24px;
+    font-size: 28px;
+    color: var(--c-ink);
+    transform: rotate(12deg);
+    animation: wobble 3s ease-in-out infinite;
+  }
+  @keyframes wobble {
+    0%, 100% { transform: rotate(12deg) scale(1); }
+    50%       { transform: rotate(18deg) scale(1.1); }
+  }
+
+  h1 {
+    font-family: 'Caveat Brush', cursive;
+    font-size: 38px;
+    color: var(--c-ink);
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .message {
+    font-size: 18px;
+    color: #888;
+    margin-top: 16px;
+    line-height: 1.5;
+  }
+
+  .accent-line {
+    width: 48px;
+    height: 4px;
+    background: var(--c-accent);
+    margin: 16px 0 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="holes">
+    <div class="hole"></div>
+    <div class="hole"></div>
+    <div class="hole"></div>
+  </div>
+
+  <div class="doodle-star">✦</div>
+  <span class="corner tl">✎</span>
+  <span class="corner br">☆</span>
+
+  <h1>{{ .title }}</h1>
+  <div class="accent-line"></div>
+  <p class="message">{{ .message }}</p>
+</div>
+
+</body>
+</html>
