@@ -27,6 +27,9 @@ linters:
       - path: 'core/validator/'
         text: 'G101'
         linters: [gosec]
+      - path: 'modules/auth/application/define/metrics\.go'
+        text: 'G101'
+        linters: [gosec]
       - path: 'infrastructure/repository/file/file_repository\.go'
         text: 'G104'
         linters: [gosec]

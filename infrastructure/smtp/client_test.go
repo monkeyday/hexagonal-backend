@@ -116,10 +116,7 @@ func TestClientDoesNotRetryAfterDATA(t *testing.T) {
 		writeLine("250 OK")
 		readLine() // DATA
 		writeLine("354 Send message")
-		for {
-			if readLine() == ".\r\n" {
-				break
-			}
+		for readLine() != ".\r\n" {
 		}
 		writeLine("550 Message rejected") // server rejects after receiving full body
 	}()

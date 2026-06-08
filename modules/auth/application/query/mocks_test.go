@@ -186,7 +186,7 @@ func (m *mockCache) GetErr(_ context.Context, key string, dest any) (bool, error
 	if m.getErr != nil {
 		return false, m.getErr
 	}
-	return m.Get(nil, key, dest), nil
+	return m.Get(context.TODO(), key, dest), nil
 }
 func (m *mockCache) Delete(_ context.Context, key string)                      { delete(m.items, key) }
 func (m *mockCache) Incr(_ context.Context, _ string) (int64, error)           { return 0, nil }

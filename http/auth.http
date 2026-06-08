@@ -114,7 +114,7 @@ POST {{baseUrl}}/reset-password
 Content-Type: application/json
 
 {
-  "token": "SQHeRSxVJnydR4D_ntPCyYQn214BXGO2yznaOP8QSvk",
+  "token": "<token-from-reset-password-email>",
   "password": "NewSecret!234"
 }
 
