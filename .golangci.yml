@@ -1,0 +1,37 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - gosec
+  exclusions:
+    rules:
+      - path: 'cmd/backend/'
+        linters: [errcheck, gosec]
+      - path: '_test\.go'
+        linters: [errcheck, gosec]
+      - text: '\.Close` is not checked'
+        linters: [errcheck]
+      - text: 'os\.Remove` is not checked'
+        linters: [errcheck]
+      - text: 'reflect\.Ptr should be inlined'
+        linters: [govet]
+      - text: 'G304'
+        linters: [gosec]
+      - text: 'G115'
+        linters: [gosec]
+      - path: 'core/validator/'
+        text: 'G101'
+        linters: [gosec]
+      - path: 'infrastructure/repository/file/file_repository\.go'
+        text: 'G104'
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
