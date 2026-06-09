@@ -125,7 +125,7 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 		{
 			name:        "unsupported response_type",
 			cmd:         &GetAuthorizeQuery{ResponseType: "token", ClientID: "client-123", RedirectURI: "https://app.example.com/callback", Scope: "openid"},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.UnsupportedResponseType,
 		},
 		{
 			name:        "missing client_id",

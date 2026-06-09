@@ -12,8 +12,10 @@ import (
 	autherrors "sc/modules/auth/errors"
 )
 
+const responseTypeCode = "code"
+
 type GetAuthorizeQuery struct {
-	ResponseType        string  `form:"response_type" validate:"required,oneof=code"`
+	ResponseType        string  `form:"response_type" validate:"required"`
 	ClientID            string  `form:"client_id"     validate:"required"`
 	RedirectURI         string  `form:"redirect_uri"  validate:"required,redirect_uri" normalize:"uri"`
 	Scope               string  `form:"scope"         validate:"required,has_any_word=openid"`
@@ -39,6 +41,10 @@ func NewGetAuthorizeUseCase(deps define.Dependencies) usecase.UseCase {
 
 func (uc *GetAuthorizeUseCase) Execute(ctx context.Context, query any) (any, error) {
 	q := query.(*GetAuthorizeQuery)
+
+	if q.ResponseType != responseTypeCode {
+		return nil, autherrors.NewErrUnsupportedResponseType()
+	}
 
 	if !uc.isValidRedirectURI(q.ClientID, q.RedirectURI) {
 		return nil, autherrors.NewErrInvalidRedirectURI()

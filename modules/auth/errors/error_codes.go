@@ -64,6 +64,10 @@ func NewErrAuthCodeNotFound() *coreerror.ErrorStruct {
 	return coreerror.NewMsg(AuthCodeNotFound, "auth code not found")
 }
 
+func NewErrUnsupportedResponseType() *coreerror.ErrorStruct {
+	return coreerror.NewMsg(UnsupportedResponseType, "unsupported_response_type")
+}
+
 func NewErrPasswordResetTokenExpired() *coreerror.ErrorStruct {
 	return coreerror.NewMsg(PasswordResetTokenExpired, "password reset token has expired")
 }
