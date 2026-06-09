@@ -99,13 +99,13 @@ export default function () {
 
     const res = http.post(
       `${BASE_URL}/token`,
-      JSON.stringify({
+      {
         grant_type:   'authorization_code',
         code:         code,
         client_id:    'smoke-client',
         redirect_uri: REDIRECT_URI,
-      }),
-      { headers: JSON_HEADERS },
+      },
+      { headers: FORM_HEADERS },
     );
 
     check(res, {

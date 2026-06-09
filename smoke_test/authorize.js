@@ -21,7 +21,9 @@ export default function () {
   });
 
   // ── Unsupported response_type — expects 400 ──────────────────────────────────
-  const unsupported = http.get(`${BASE_URL}/authorize?response_type=token`,
+  const unsupported = http.get(
+    `${BASE_URL}/authorize?response_type=token&client_id=smoke-client` +
+    `&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=openid%20email`,
     { responseCallback: expectedStatuses(400) },
   );
   check(unsupported, {

@@ -79,13 +79,13 @@ export default function (tokens) {
 
     const res = http.post(
       `${BASE_URL}/protocol/openid-connect/token`,
-      JSON.stringify({
+      {
         grant_type:   'authorization_code',
         code:         decodeURIComponent(match[1]),
         client_id:    'smoke-client',
         redirect_uri: REDIRECT_URI,
-      }),
-      { headers: JSON_HEADERS },
+      },
+      { headers: FORM_HEADERS },
     );
     check(res, {
       'status 200':        (r) => r.status === 200,

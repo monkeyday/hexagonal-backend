@@ -84,7 +84,9 @@ export default function (tokens) {
     );
     check(valid, { 'valid: status 200': (r) => r.status === 200 });
 
-    const bad = http.get(`${BASE_URL}/authorize?response_type=token`,
+    const bad = http.get(
+      `${BASE_URL}/authorize?response_type=token&client_id=smoke-client` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=openid%20email`,
       { responseCallback: expectedStatuses(400) },
     );
     check(bad, {
@@ -148,11 +150,13 @@ export default function (tokens) {
 
     const res = http.post(
       `${BASE_URL}/token`,
-      JSON.stringify({
-        grant_type: 'authorization_code', code: decodeURIComponent(match[1]),
-        client_id: 'smoke-client', redirect_uri: REDIRECT_URI,
-      }),
-      { headers: JSON_HEADERS },
+      {
+        grant_type:   'authorization_code',
+        code:         decodeURIComponent(match[1]),
+        client_id:    'smoke-client',
+        redirect_uri: REDIRECT_URI,
+      },
+      { headers: FORM_HEADERS },
     );
     check(res, {
       'status 200':        (r) => r.status === 200,
