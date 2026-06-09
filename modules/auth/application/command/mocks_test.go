@@ -15,6 +15,7 @@ import (
 // ── mock JWTSvc ───────────────────────────────────────────────────────────
 
 type mockJwtService struct {
+	mu                 sync.Mutex
 	accessToken        string
 	refreshToken       string
 	accessErr          error
@@ -24,7 +25,7 @@ type mockJwtService struct {
 	parseErr           error
 	parseIDTokenClaims *corejwt.IDTokenClaims
 	parseIDTokenErr    error
-	// captured call arguments
+	// captured call arguments — guarded by mu
 	capturedAccessUserID     string
 	capturedAccessScope      string
 	capturedAccessExpireSecs int
@@ -33,9 +34,11 @@ type mockJwtService struct {
 }
 
 func (m *mockJwtService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
+	m.mu.Lock()
 	m.capturedAccessUserID = userID
 	m.capturedAccessScope = scope
 	m.capturedAccessExpireSecs = expireSecs
+	m.mu.Unlock()
 	return m.accessToken, m.accessErr
 }
 
@@ -44,8 +47,10 @@ func (m *mockJwtService) GenRefreshToken(_ string) (string, error) {
 }
 
 func (m *mockJwtService) GenIDToken(args port.IDTokenArgs) (string, error) {
+	m.mu.Lock()
 	m.capturedIDTokenClientID = args.ClientID
 	m.capturedIDTokenNonce = args.Nonce
+	m.mu.Unlock()
 	return "mock-id-token", m.idTokenErr
 }
 
