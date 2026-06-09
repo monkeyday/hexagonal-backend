@@ -451,5 +451,3 @@ If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is
 - Use Redis for a shared cache / session state when running multiple instances.
 - Do not commit `.env`, private keys, user stores, or refresh token stores.
 - File storage and in-memory cache are convenient defaults for local development, but are not suitable for horizontally scaled deployments.
-
----

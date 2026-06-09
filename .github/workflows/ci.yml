@@ -93,6 +93,63 @@ jobs:
         if: always()
         run: cat /tmp/server.log || true
 
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate RSA key pair
+        run: |
+          mkdir -p ci-keys
+          openssl genrsa -out ci-keys/private_key.pem 2048
+          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
+
+      - name: Write CI .env
+        run: |
+          cat > ci.env << EOF
+          PORT=:9876
+          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
+          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
+          JWT_KID=ci
+          JWT_ISSUER=http://127.0.0.1:9876
+          REPOSITORY_USED=file
+          FILE_DIR=$GITHUB_WORKSPACE/tmp
+          USER_FILE_PATH=user.json
+          OAUTH_CLIENT_REDIRECT_WHITELIST=my_client http://localhost:3000/callback;smoke-client https://app.example.com/callback
+          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
+          EOF
+
+      - name: Build server
+        run: go build -o bin/auth ./cmd/auth
+
+      - name: Install k6
+        run: |
+          curl -sSfL "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 k6-v2.0.0-linux-amd64/k6
+
+      - name: Run smoke tests
+        env:
+          ENV_PATH: ${{ github.workspace }}/ci.env
+        run: |
+          ./bin/auth > /tmp/server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9876/.well-known/openid-configuration > /dev/null 2>&1 && break
+            sleep 1
+          done
+          k6 run smoke_test/all.js
+
+      - name: Show server log
+        if: always()
+        run: cat /tmp/server.log || true
+
   vuln:
     runs-on: ubuntu-latest
     steps:
