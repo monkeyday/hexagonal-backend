@@ -1,6 +1,6 @@
 # OIDC Auth Server
 
-An OIDC server written in Go with production-oriented hexagonal architecture, supporting Authorization Code Flow, refresh token rotation, brute-force lockout, and a full OIDC provider surface.
+An OIDC server written in Go with a production-oriented hexagonal architecture, supporting Authorization Code Flow, refresh token rotation, brute-force lockout, and a broad OIDC/OAuth2 provider surface.
 
 ---
 
@@ -19,13 +19,15 @@ An OIDC server written in Go with production-oriented hexagonal architecture, su
 
 ## Features
 
-- **Authorization Code Flow** — state and nonce validation, PKCE (S256)
+- **Authorization Code Flow** — state and nonce validation; optional PKCE parameters accepted for compatible clients
 - **Token lifecycle** — RS256-signed access tokens, opaque refresh tokens with rotation, ID tokens with nonce
-- **Security** — CSRF protection on sign-in, brute-force lockout after 3 failed attempts, atomic session consumption, rate limiting
+- **Security** — CSRF protection on sign-in, brute-force lockout after three failed attempts, atomic session consumption, distributed rate limiting
 - **OIDC provider surface** — Discovery, JWKS, UserInfo, token introspection (RFC 7662), token revocation (RFC 7009), logout
 - **Storage** — pluggable: file-based (default) or MongoDB
 - **Cache** — pluggable: in-memory (default) or Redis
 - **Password reset** — email-based reset flow; logs reset links to stdout when `SMTP_HOST` is unset
+
+> PKCE parameters (`code_challenge`, `code_challenge_method=S256`) are currently accepted when provided. Mandatory PKCE enforcement for public clients is planned for a later phase.
 
 ---
 
@@ -59,7 +61,7 @@ infrastructure/
   repository/     — MongoDB and file-based repo drivers
   smtp/           — persistent SMTP client (STARTTLS, reconnect, deadline enforcement)
 e2e/              — shell-based end-to-end test suite
-smoke_test/       — k6 load/smoke scripts per endpoint
+smoke_test/       — k6 smoke scripts per endpoint and flow verification
 http/             — auth.http IDE request file (VS Code / IntelliJ)
 docs/             — architecture diagrams, flow analysis, API spec
 ```
@@ -149,7 +151,8 @@ go run cmd/auth/main.go
 ```
 
 Server starts at **http://localhost:9876**  
-OIDC Discovery: http://localhost:9876/.well-known/openid-configuration
+For OIDC clients, start with the discovery document:
+http://localhost:9876/.well-known/openid-configuration
 
 ### 4. Run the test client (optional)
 
@@ -202,7 +205,7 @@ go test ./...
 
 ### E2E tests (`e2e/test_auth.sh`)
 
-Shell script that exercises the full server over HTTP: sign-up, password grant, Authorization Code Flow (CSRF, state, nonce), refresh, introspect, revoke, logout.
+Shell script that exercises the full server over HTTP: sign-up, internal/trusted-client password grant, Authorization Code Flow (CSRF, state, nonce), refresh, introspect, revoke, logout.
 
 ```sh
 # Server already running (CI / remote / Docker)
@@ -216,16 +219,18 @@ START_SERVER=1 bash e2e/test_auth.sh
 
 ### Smoke tests (`smoke_test/`)
 
-k6 scripts covering each endpoint area, plus `all.js` as a combined suite. Use for load testing or verifying a deployed environment.
+k6 scripts covering each endpoint area, plus `all.js` as a combined suite. Use them as quick health/regression checks against a local, staging, or deployed environment; they are not intended to measure capacity or find stress limits.
 
 The smoke tests use `client_id=smoke-client` and `redirect_uri=https://app.example.com/callback`, so the env must include that entry in `OAUTH_CLIENT_REDIRECT_WHITELIST` — the Quick Start `.env` above already includes it.
+
+The shell-based E2E test validates one coherent OIDC/auth lifecycle, while the k6 smoke tests validate broad endpoint availability and basic response behavior.
 
 ```sh
 k6 run smoke_test/all.js
 k6 run -e BASE_URL=http://staging:9876 smoke_test/all.js
 ```
 
-### IDE request file (`http/auth.http`)
+### IDE request file ([`http/auth.http`](http/auth.http))
 
 VS Code REST Client / IntelliJ HTTP Client file with pre-built requests for every endpoint. Useful for manual exploration.
 
@@ -253,7 +258,7 @@ Full OpenAPI spec: [`docs/auth.yaml`](docs/auth.yaml)
 | `GET` | `/authorize` | Start Authorization Code Flow |
 | `GET` | `/sign-in` | Sign-in page (CSRF token injected) |
 | `POST` | `/sign-in` | Submit credentials; issues auth code |
-| `POST` | `/token` | Token endpoint — `authorization_code`, `refresh_token`, `password` grants |
+| `POST` | `/token` | Token endpoint — `authorization_code`, `refresh_token`, and internal/trusted-client `password` grants |
 | `GET` | `/userinfo` | UserInfo claims (Bearer token) |
 | `GET` | `/.well-known/openid-configuration` | OIDC Discovery document |
 | `GET` | `/.well-known/jwks.json` | JSON Web Key Set |
@@ -262,7 +267,7 @@ Full OpenAPI spec: [`docs/auth.yaml`](docs/auth.yaml)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/oidc/logout` | Session termination |
+| `GET` | `/oidc/logout` | Logout / best-effort session termination |
 | `POST` | `/oidc/revoke` | Token revocation (RFC 7009) |
 | `POST` | `/oidc/introspect` | Token introspection (RFC 7662) |
 | `GET` | `/oidc/me` | Profile (authenticated) |
@@ -296,7 +301,7 @@ Full OpenAPI spec: [`docs/auth.yaml`](docs/auth.yaml)
 
 ## Persistence
 
-File storage writes two files under `FILE_DIR` (default `tmp/`):
+File storage writes two files under `FILE_DIR` (default `tmp/`). It is intended for local development or single-instance deployments; use MongoDB for shared/durable storage in multi-instance environments.
 
 | File | Contents |
 |---|---|
@@ -357,7 +362,7 @@ All configuration is read from `cmd/auth/.env` by default, or the path set in `E
 
 ### Cache — Redis (optional, falls back to in-memory)
 
-If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is not shared across instances.
+If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is not shared across instances, so use Redis for multi-instance deployments where authorized sessions, auth codes, token blacklist entries, and rate-limit counters must be shared.
 
 | Variable | Description |
 |---|---|
@@ -398,41 +403,53 @@ If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is
 
 | Value | Duration | Constant | Source |
 |---|---|---|---|
-| Auth code TTL | 5 minutes | `AuthCodeTTL` | `modules/auth/domain/entity/auth_code.go` |
-| Authorize request TTL (session cookie + cache) | 10 minutes | `AuthorizeRequestTTL` | `modules/auth/domain/entity/auth_request.go` |
-| Refresh token TTL | 30 days | `RefreshTokenTTL` | `modules/auth/domain/entity/tokens.go` |
-| Password reset token TTL | 15 minutes | `PasswordResetTokenTTL` | `modules/auth/domain/entity/user.go` |
-| Access token default expiry | 15 minutes (900 s) | `DefaultExpirySecs` | `modules/auth/application/define/token_expiration.go` |
-| Access token maximum expiry | 24 hours (86400 s) | `MaxTokenExpirySecs` | `modules/auth/application/define/token_expiration.go` |
-| MongoDB TTL index on refresh tokens | at `expires_at` field | `SetExpireAfterSeconds(0)` | `modules/auth/adapter/out/mongo_refresh_token_repository.go` |
+| Auth code TTL | 5 minutes | `AuthCodeTTL` | [`modules/auth/domain/entity/auth_code.go`](modules/auth/domain/entity/auth_code.go) |
+| Authorize request TTL (session cookie + cache) | 10 minutes | `AuthorizeRequestTTL` | [`modules/auth/domain/entity/auth_request.go`](modules/auth/domain/entity/auth_request.go) |
+| Refresh token TTL | 30 days | `RefreshTokenTTL` | [`modules/auth/domain/entity/tokens.go`](modules/auth/domain/entity/tokens.go) |
+| Password reset token TTL | 15 minutes | `PasswordResetTokenTTL` | [`modules/auth/domain/entity/user.go`](modules/auth/domain/entity/user.go) |
+| Access token default expiry | 15 minutes (900 s) | `DefaultExpirySecs` | [`modules/auth/application/define/token_expiration.go`](modules/auth/application/define/token_expiration.go) |
+| Access token maximum expiry | 24 hours (86400 s) | `MaxTokenExpirySecs` | [`modules/auth/application/define/token_expiration.go`](modules/auth/application/define/token_expiration.go) |
+| MongoDB TTL index on refresh tokens | at `expires_at` field | `SetExpireAfterSeconds(0)` | [`modules/auth/adapter/out/mongo_refresh_token_repository.go`](modules/auth/adapter/out/mongo_refresh_token_repository.go) |
 
 ### HTTP Server
 
 | Value | Duration | Constant | Source |
 |---|---|---|---|
-| Read header timeout | 5 s | `readHeaderTimeout` | `handler/web/server.go` |
-| Read timeout | 30 s | `readTimeout` | `handler/web/server.go` |
-| Write timeout | 30 s | `writeTimeout` | `handler/web/server.go` |
-| Idle timeout | 60 s | `idleTimeout` | `handler/web/server.go` |
-| Graceful shutdown timeout | 5 s | `shutdownTimeout` | `handler/web/server.go` |
-| Cleanup timeout | 5 s | `cleanupTimeout` | `handler/web/server.go` |
-| CORS preflight cache (`Access-Control-Max-Age`) | 12 hours | — | `handler/web/middleware/cors.go` |
+| Read header timeout | 5 s | `readHeaderTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| Read timeout | 30 s | `readTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| Write timeout | 30 s | `writeTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| Idle timeout | 60 s | `idleTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| Graceful shutdown timeout | 5 s | `shutdownTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| Cleanup timeout | 5 s | `cleanupTimeout` | [`handler/web/server.go`](handler/web/server.go) |
+| CORS preflight cache (`Access-Control-Max-Age`) | 12 hours | — | [`handler/web/middleware/cors.go`](handler/web/middleware/cors.go) |
 
 ### Infrastructure
 
 | Value | Duration | Constant | Source |
 |---|---|---|---|
-| Redis ping timeout | 5 s | `redisPingTimeout` | `infrastructure/cache/redis.go` |
-| MongoDB connect timeout | 5 s | — | `infrastructure/repository/mongo/client.go` |
-| MongoDB server selection timeout | 10 s (default) | — | `infrastructure/repository/mongo/client.go` |
-| SMTP dial timeout | 10 s | `dialTimeout` | `infrastructure/smtp/client.go` |
-| SMTP send timeout (I/O deadline) | 30 s | `sendTimeout` | `infrastructure/smtp/client.go` |
-| Mongo index creation timeout | 10 s | — | `modules/auth/adapter/out/mongo_*_repository.go` |
+| Redis ping timeout | 5 s | `redisPingTimeout` | [`infrastructure/cache/redis.go`](infrastructure/cache/redis.go) |
+| MongoDB connect timeout | 5 s | — | [`infrastructure/repository/mongo/client.go`](infrastructure/repository/mongo/client.go) |
+| MongoDB server selection timeout | 10 s (default) | — | [`infrastructure/repository/mongo/client.go`](infrastructure/repository/mongo/client.go) |
+| SMTP dial timeout | 10 s | `dialTimeout` | [`infrastructure/smtp/client.go`](infrastructure/smtp/client.go) |
+| SMTP send timeout (I/O deadline) | 30 s | `sendTimeout` | [`infrastructure/smtp/client.go`](infrastructure/smtp/client.go) |
+| Mongo index creation timeout | 10 s | — | [`modules/auth/adapter/out/`](modules/auth/adapter/out/) |
 
 ### Test Frontend (`cmd/backend`)
 
 | Value | Duration | Constant | Source |
 |---|---|---|---|
-| Session cookie `MaxAge` | 24 hours (86400 s) | `sessionMaxAge` | `cmd/backend/main.go` |
-| Token proactive refresh threshold | 1 minute before expiry | `refreshThreshold` | `cmd/backend/main.go` |
-| Requested `expire_secs` sent to token endpoint | 120 s | — | `cmd/backend/main.go` |
+| Session cookie `MaxAge` | 24 hours (86400 s) | `sessionMaxAge` | [`cmd/backend/main.go`](cmd/backend/main.go) |
+| Token proactive refresh threshold | 1 minute before expiry | `refreshThreshold` | [`cmd/backend/main.go`](cmd/backend/main.go) |
+| Requested `expire_secs` sent to token endpoint | 120 s | — | [`cmd/backend/main.go`](cmd/backend/main.go) |
+
+---
+
+## Production Notes
+
+- Serve the auth server over HTTPS and set `COOKIE_SECURE=true`.
+- Use MongoDB for durable/shared storage when running outside local development.
+- Use Redis for a shared cache / session state when running multiple instances.
+- Do not commit `.env`, private keys, user stores, or refresh token stores.
+- File storage and in-memory cache are convenient defaults for local development, but are not suitable for horizontally scaled deployments.
+
+---
