@@ -136,7 +136,8 @@ JWT_ISSUER=http://localhost:9876
 REPOSITORY_USED=file
 FILE_DIR=tmp
 USER_FILE_PATH=user.json
-OAUTH_CLIENT_REDIRECT_WHITELIST=my_client http://localhost:3000/callback;smoke-client https://app.example.com/callback
+OAUTH_CLIENT_ID=my_client
+OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
 OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
 COOKIE_SECURE=false
 EOF
@@ -221,7 +222,7 @@ START_SERVER=1 bash e2e/test_auth.sh
 
 k6 scripts covering each endpoint area, plus `all.js` as a combined suite. Use them as quick health/regression checks against a local, staging, or deployed environment; they are not intended to measure capacity or find stress limits.
 
-The smoke tests use `client_id=smoke-client` and `redirect_uri=https://app.example.com/callback`, so the env must include that entry in `OAUTH_CLIENT_REDIRECT_WHITELIST` — the Quick Start `.env` above already includes it.
+The smoke tests use `client_id=smoke-client` and `redirect_uri=https://app.example.com/callback`. The server registers a single client from env, so restart it with `OAUTH_CLIENT_ID=smoke-client` and `OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback` before running the smoke suite.
 
 The shell-based E2E test validates one coherent OIDC/auth lifecycle, while the k6 smoke tests validate broad endpoint availability and basic response behavior.
 
@@ -318,7 +319,7 @@ Both are safe to delete to reset local state. They are created automatically on 
 |---|---|
 | Server panics at startup | `cmd/auth/.env` not found — check the path or set `ENV_PATH` |
 | `failed to parse private key` | Key was generated with a passphrase — regenerate with `-N ""` |
-| `client redirect_uri not valid` | `redirect_uri` in the request is not in `OAUTH_CLIENT_REDIRECT_WHITELIST` |
+| `client redirect_uri not valid` | `client_id` does not match `OAUTH_CLIENT_ID`, or `redirect_uri` is not in `OAUTH_CLIENT_REDIRECT_URIS` |
 | `auth_session` cookie not sent to `/sign-in` | Cookie was blocked by `SameSite=Strict`; server correctly uses `SameSite=Lax` — check client |
 | Redis connection errors | Server falls back to in-memory cache automatically; check logs for the warning |
 | Port already in use | Another process on `:9876` — change `PORT` in `.env` |
@@ -374,7 +375,11 @@ If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is
 
 | Variable | Example | Description |
 |---|---|---|
-| `OAUTH_CLIENT_REDIRECT_WHITELIST` | `client_a https://a.example.com/cb;client_b https://b.example.com/cb,https://b.example.com/cb2` | Semicolon-separated entries of `client_id uri[,uri…]`; defaults to `client-123` with localhost callbacks if unset |
+| `OAUTH_CLIENT_ID` | `my_client` | ID of the single registered OAuth client; defaults to `client-123` with localhost callbacks if unset |
+| `OAUTH_CLIENT_REDIRECT_URIS` | `https://a.example.com/cb,https://a.example.com/cb2` | Comma-separated allowed redirect URIs for the client |
+| `OAUTH_CLIENT_AUTH_METHOD` | `none` | `none` (public), `client_secret_basic`, or `client_secret_post`; default `none` |
+| `OAUTH_CLIENT_SECRET` | `s3cret` | Client secret; required when auth method is not `none` (hashed at startup) |
+| `OAUTH_CLIENT_ALLOWED_GRANTS` | `authorization_code,refresh_token` | Comma-separated allowed grant types; defaults to all supported grants |
 | `OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST` | `https://app.example.com` | Comma-separated allowed post-logout URIs |
 | `OAUTH_SCOPE_ALLOWLIST` | `openid,email,profile` | Comma-separated allowed scopes (default: `openid email profile phone`) |
 | `CORS_ORIGINS` | `https://app.example.com` | Comma-separated CORS origins (default: `*`) |

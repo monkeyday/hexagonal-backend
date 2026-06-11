@@ -39,9 +39,19 @@ type FileRepositoryConfig struct {
 }
 
 type OAuthConfig struct {
-	RedirectURIAllowlist        map[string][]string
+	Client                      ClientConfig
 	PostLogoutRedirectAllowlist []string
 	ScopeAllowlist              []string
+}
+
+// ClientConfig declares the single registered OAuth client until a persistent
+// client registry lands. Parsed into an entity.Client at composition time.
+type ClientConfig struct {
+	ID            string
+	AuthMethod    string
+	Secret        string
+	RedirectURIs  []string
+	AllowedGrants []string
 }
 
 var (
@@ -89,7 +99,7 @@ func Load(entryPath string) *Settings {
 				DB:       parseRedisDB(os.Getenv("REDIS_DB")),
 			},
 			OAuth: OAuthConfig{
-				RedirectURIAllowlist:        parseRedirectURIAllowlist(os.Getenv("OAUTH_CLIENT_REDIRECT_WHITELIST")),
+				Client:                      parseClientConfig(),
 				PostLogoutRedirectAllowlist: parseCommaSeparated(os.Getenv("OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST")),
 				ScopeAllowlist:              parseScopeAllowlist(os.Getenv("OAUTH_SCOPE_ALLOWLIST")),
 			},
@@ -143,43 +153,45 @@ func parseRedisDB(raw string) int {
 	return db
 }
 
-func parseRedirectURIAllowlist(raw string) map[string][]string {
-	if raw == "" {
-		return map[string][]string{
-			"client-123": {"https://app.example.com/callback", "http://localhost:3000/callback"},
+const (
+	defaultClientID         = "client-123"
+	defaultClientAuthMethod = "none"
+)
+
+var (
+	defaultClientRedirectURIs = []string{"https://app.example.com/callback", "http://localhost:3000/callback"}
+	// All supported grants until per-client grant enforcement lands (finding #1).
+	defaultClientAllowedGrants = []string{"authorization_code", "refresh_token", "password", "client_credentials"}
+)
+
+func parseClientConfig() ClientConfig {
+	id := os.Getenv("OAUTH_CLIENT_ID")
+	if id == "" {
+		// Dev fallback mirroring the pre-registry allowlist default.
+		return ClientConfig{
+			ID:            defaultClientID,
+			AuthMethod:    defaultClientAuthMethod,
+			RedirectURIs:  defaultClientRedirectURIs,
+			AllowedGrants: defaultClientAllowedGrants,
 		}
 	}
 
-	allowlist := make(map[string][]string)
-	for pair := range strings.SplitSeq(raw, ";") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-
-		clientID, urisRaw, ok := strings.Cut(pair, " ")
-		if !ok {
-			continue
-		}
-
-		clientID = strings.TrimSpace(clientID)
-		if clientID == "" {
-			continue
-		}
-
-		uris := make([]string, 0)
-		for uri := range strings.SplitSeq(urisRaw, ",") {
-			if trimmed := strings.TrimSpace(uri); trimmed != "" {
-				uris = append(uris, trimmed)
-			}
-		}
-
-		if len(uris) > 0 {
-			allowlist[clientID] = uris
-		}
+	authMethod := os.Getenv("OAUTH_CLIENT_AUTH_METHOD")
+	if authMethod == "" {
+		authMethod = defaultClientAuthMethod
+	}
+	grants := parseCommaSeparated(os.Getenv("OAUTH_CLIENT_ALLOWED_GRANTS"))
+	if len(grants) == 0 {
+		grants = defaultClientAllowedGrants
 	}
 
-	return allowlist
+	return ClientConfig{
+		ID:            id,
+		AuthMethod:    authMethod,
+		Secret:        os.Getenv("OAUTH_CLIENT_SECRET"),
+		RedirectURIs:  parseCommaSeparated(os.Getenv("OAUTH_CLIENT_REDIRECT_URIS")),
+		AllowedGrants: grants,
+	}
 }
 
 func parseScopeAllowlist(raw string) []string {

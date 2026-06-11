@@ -73,7 +73,8 @@ jobs:
           REPOSITORY_USED=file
           FILE_DIR=$GITHUB_WORKSPACE/tmp
           USER_FILE_PATH=user.json
-          OAUTH_CLIENT_REDIRECT_WHITELIST=my_client http://localhost:3000/callback
+          OAUTH_CLIENT_ID=my_client
+          OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
           EOF
 
@@ -121,7 +122,8 @@ jobs:
           REPOSITORY_USED=file
           FILE_DIR=$GITHUB_WORKSPACE/tmp
           USER_FILE_PATH=user.json
-          OAUTH_CLIENT_REDIRECT_WHITELIST=my_client http://localhost:3000/callback;smoke-client https://app.example.com/callback
+          OAUTH_CLIENT_ID=smoke-client
+          OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
           EOF
 

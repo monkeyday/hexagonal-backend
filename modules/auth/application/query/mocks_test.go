@@ -7,6 +7,7 @@ import (
 	corejwt "sc/core/jwt"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
+	"testing"
 	"time"
 )
 
@@ -236,6 +237,34 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(_ context.Context, userID entity
 		}
 	}
 	return nil
+}
+
+// ── mock ClientRegistry ───────────────────────────────────────────────────────
+
+type mockClientRegistry struct {
+	clients map[entity.ClientID]*entity.Client
+	findErr error
+}
+
+func newMockClientRegistry(t *testing.T, clientID, redirectURI string) *mockClientRegistry {
+	t.Helper()
+	client, err := entity.NewClient(entity.ClientArgs{
+		ID:            clientID,
+		AuthMethod:    entity.ClientAuthNone,
+		RedirectURIs:  []string{redirectURI},
+		AllowedGrants: []entity.GrantType{entity.GrantAuthorizationCode, entity.GrantRefreshToken},
+	})
+	if err != nil {
+		t.Fatalf("newMockClientRegistry: %v", err)
+	}
+	return &mockClientRegistry{clients: map[entity.ClientID]*entity.Client{client.ID: client}}
+}
+
+func (m *mockClientRegistry) FindByID(_ context.Context, _ entity.TenantID, id entity.ClientID) (*entity.Client, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	return m.clients[id], nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

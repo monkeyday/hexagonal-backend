@@ -8,7 +8,11 @@ import (
 
 type ClientID string
 type SessionID string
+type TenantID string
 type UserID string
+
+// DefaultTenantID is the single realm used until multi-tenancy lands.
+const DefaultTenantID TenantID = "default"
 
 func NewClientID(id string) (ClientID, error) {
 	if id == "" {

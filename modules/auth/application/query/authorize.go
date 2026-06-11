@@ -3,13 +3,13 @@ package query
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	corecache "sc/core/cache"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"sc/modules/auth/port"
 )
 
 const responseTypeCode = "code"
@@ -26,16 +26,14 @@ type GetAuthorizeQuery struct {
 }
 
 type GetAuthorizeUseCase struct {
-	// redirectURIAllowlist stands in for a client registry.
-	// TODO: replace with a ClientRepository once a client registry exists.
-	cache                corecache.Cache
-	redirectURIAllowlist map[string][]string
+	cache   corecache.Cache
+	clients port.ClientRegistry
 }
 
 func NewGetAuthorizeUseCase(deps define.Dependencies) usecase.UseCase {
 	return &GetAuthorizeUseCase{
-		cache:                deps.Cache,
-		redirectURIAllowlist: deps.RedirectURIAllowlist,
+		cache:   deps.Cache,
+		clients: deps.ClientRegistry,
 	}
 }
 
@@ -46,11 +44,15 @@ func (uc *GetAuthorizeUseCase) Execute(ctx context.Context, query any) (any, err
 		return nil, autherrors.NewErrUnsupportedResponseType()
 	}
 
-	if !uc.isValidRedirectURI(q.ClientID, q.RedirectURI) {
+	client, err := uc.clients.FindByID(ctx, entity.DefaultTenantID, entity.ClientID(q.ClientID))
+	if err != nil {
+		return nil, err
+	}
+	if client == nil || !client.AllowsRedirectURI(q.RedirectURI) {
 		return nil, autherrors.NewErrInvalidRedirectURI()
 	}
 
-	// TODO: once a client registry exists, require code_challenge for public clients (PKCE mandatory).
+	// TODO(#1): require code_challenge when client.IsPublic() (PKCE mandatory for public clients).
 	session, err := entity.NewAuthorizeRequest(entity.AuthorizeRequestArgs{
 		ClientID:            q.ClientID,
 		RedirectURI:         q.RedirectURI,
@@ -68,9 +70,4 @@ func (uc *GetAuthorizeUseCase) Execute(ctx context.Context, query any) (any, err
 	}
 
 	return &define.GetAuthorizeResponse{SessionID: string(session.ID)}, nil
-}
-
-func (uc *GetAuthorizeUseCase) isValidRedirectURI(clientID, redirectURI string) bool {
-	// TODO: replace with a client registry lookup once a client registry exists.
-	return slices.Contains(uc.redirectURIAllowlist[clientID], redirectURI)
 }

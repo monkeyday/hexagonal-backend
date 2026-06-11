@@ -16,16 +16,14 @@ import (
 func TestGetAuthorizeUseCase(t *testing.T) {
 	ctx := context.Background()
 
-	whitelist := map[string][]string{
-		"client-123": {"https://app.example.com/callback"},
-	}
+	registry := newMockClientRegistry(t, "client-123", "https://app.example.com/callback")
 
 	newMod := func() (*usecase.Registry, *mockCache) {
 		mc := newMockCache()
 		mod := usecase.NewRegistry()
 		mod.Register(GetAuthorizeQuery{}, NewGetAuthorizeUseCase(define.Dependencies{
-			Cache:                mc,
-			RedirectURIAllowlist: whitelist,
+			Cache:          mc,
+			ClientRegistry: registry,
 		}))
 		return mod, mc
 	}
@@ -113,7 +111,7 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 			wantErrCode: autherrors.InvalidArguments,
 		},
 		{
-			name:        "unknown client_id — redirect_uri not in empty whitelist — error",
+			name:        "unknown client_id — rejected fail-closed",
 			cmd:         &GetAuthorizeQuery{ResponseType: "code", ClientID: "unknown", RedirectURI: "https://app.example.com/callback", Scope: "openid"},
 			wantErrCode: autherrors.InvalidArguments,
 		},
@@ -236,8 +234,8 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 		mc.setErr = fmt.Errorf("redis down")
 		mod := usecase.NewRegistry()
 		mod.Register(GetAuthorizeQuery{}, NewGetAuthorizeUseCase(define.Dependencies{
-			Cache:                mc,
-			RedirectURIAllowlist: whitelist,
+			Cache:          mc,
+			ClientRegistry: registry,
 		}))
 		_, err := mod.Dispatch(ctx, &GetAuthorizeQuery{
 			ResponseType: "code",
