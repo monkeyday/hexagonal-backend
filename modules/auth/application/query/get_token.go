@@ -52,7 +52,7 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 	}
 
 	if err := user.ValidatePassword(q.Password); err != nil {
-		log.Warn().Str("password", q.Password).Msg("password not matched")
+		log.Warn().Str("email", q.Email).Msg("password not matched")
 		return nil, autherrors.NewErrInvalidEmailOrPassword()
 	}
 

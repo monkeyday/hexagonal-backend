@@ -51,7 +51,7 @@ func NewDeps(cfg *config.Settings) Deps {
 	case "mongo":
 		mongoClient, err := mongorepo.NewMongoClient(cfg.Mongo)
 		if err != nil {
-			log.Err(err).Interface("config", cfg.Mongo).Msg("Failed to connect to MongoDB")
+			log.Err(err).Str("host", cfg.Mongo.Host).Str("database", cfg.Mongo.Database).Msg("Failed to connect to MongoDB")
 			panic(err)
 		}
 		deps.MongoClient = mongoClient
