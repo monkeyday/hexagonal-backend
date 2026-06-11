@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -203,4 +204,30 @@ func TestParseIDToken(t *testing.T) {
 			t.Fatal("expected error, got nil")
 		}
 	})
+}
+
+func TestGetJWKS_MinimalOctetEncoding(t *testing.T) {
+	svc := newTestService(t)
+
+	keys := svc.GetJWKS()["keys"]
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 JWK, got %d", len(keys))
+	}
+	jwk := keys[0]
+
+	// RFC 7518 §6.3.1: 65537 must encode as "AQAB", not zero-padded "AAEAAQ".
+	if jwk.E != "AQAB" {
+		t.Errorf("e = %q, want AQAB", jwk.E)
+	}
+
+	n, err := base64.RawURLEncoding.DecodeString(jwk.N)
+	if err != nil {
+		t.Fatalf("n is not valid base64url: %v", err)
+	}
+	if len(n) == 0 || n[0] == 0x00 {
+		t.Errorf("n must be a minimal-octet value without a leading zero, first byte = %#x", n[0])
+	}
+	if len(n) != 256 {
+		t.Errorf("n length = %d bytes, want 256 for a 2048-bit key", len(n))
+	}
 }

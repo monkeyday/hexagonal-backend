@@ -4,9 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	corejwt "sc/core/jwt"
 	"slices"
@@ -235,12 +235,11 @@ func loadPublicKeyAndJWK(path, kid string) (*rsa.PublicKey, corejwt.JWK, error) 
 		return nil, corejwt.JWK{}, fmt.Errorf("parse public key failed at %s: %w", path, err)
 	}
 
-	bs := make([]byte, 4)
-	binary.BigEndian.PutUint32(bs, uint32(key.E))
-
+	// RFC 7518 §6.3.1: e and n are minimal-octet big-endian values; a
+	// zero-padded exponent ("AAEAAQ") is rejected by strict JOSE parsers.
 	return key, corejwt.JWK{
 		Kty: "RSA",
-		E:   base64.RawURLEncoding.EncodeToString(bs),
+		E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
 		N:   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
 		Alg: "RS256",
 		Use: "sig",
