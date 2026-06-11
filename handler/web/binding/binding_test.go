@@ -147,6 +147,38 @@ func TestBind_CookieTag(t *testing.T) {
 	}
 }
 
+func TestBind_CookieTag_BodyWins(t *testing.T) {
+	// A stale cookie must not override an explicit body parameter
+	// (e.g. refresh_token sent in the /token form body).
+	type C struct {
+		Token string `form:"refresh_token" cookie:"refresh_token"`
+	}
+	c := newCtx(http.MethodPost, "/", "refresh_token=body-value", "application/x-www-form-urlencoded")
+	c.Request.AddCookie(&http.Cookie{Name: "refresh_token", Value: "stale-cookie-value"})
+	var out C
+	if err := Bind(c, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Token != "body-value" {
+		t.Errorf("got %q, want body parameter to win over cookie", out.Token)
+	}
+}
+
+func TestBind_CookieTag_FallbackWhenBodyEmpty(t *testing.T) {
+	type C struct {
+		Token string `form:"refresh_token" cookie:"refresh_token"`
+	}
+	c := newCtx(http.MethodPost, "/", "other=x", "application/x-www-form-urlencoded")
+	c.Request.AddCookie(&http.Cookie{Name: "refresh_token", Value: "cookie-value"})
+	var out C
+	if err := Bind(c, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Token != "cookie-value" {
+		t.Errorf("got %q, want cookie fallback when body omits the field", out.Token)
+	}
+}
+
 func TestBind_CookieTag_Missing(t *testing.T) {
 	type C struct {
 		Token string `cookie:"refresh_token"`
@@ -203,6 +235,22 @@ func TestBind_NormalizeURI(t *testing.T) {
 				t.Errorf("got %q, want %q", q.RedirectURI, tc.want)
 			}
 		})
+	}
+}
+
+func TestBind_NormalizeURI_FormBody(t *testing.T) {
+	// The token endpoint receives redirect_uri in a form-encoded body; the
+	// normalize tag must apply there exactly as it does for query params.
+	type Q struct {
+		RedirectURI string `form:"redirect_uri" normalize:"uri"`
+	}
+	c := newCtx(http.MethodPost, "/", "redirect_uri=HTTPS://app.example.com/callback", "application/x-www-form-urlencoded")
+	var q Q
+	if err := Bind(c, &q); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if q.RedirectURI != "https://app.example.com/callback" {
+		t.Errorf("got %q, want normalized scheme", q.RedirectURI)
 	}
 }
 

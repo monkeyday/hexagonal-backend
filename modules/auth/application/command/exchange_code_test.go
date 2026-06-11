@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	coreerror "sc/core/error"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
@@ -461,5 +462,18 @@ func TestExchangeCodeValidation(t *testing.T) {
 				t.Fatalf("want err_code %d, got %v", autherrors.InvalidArguments, err)
 			}
 		})
+	}
+}
+
+func TestExchangeCodeCommand_RedirectURIIsNormalized(t *testing.T) {
+	// Regression guard for finding #9: the redirect_uri compared at /token
+	// must be normalized into the same canonical space as /authorize and the
+	// client registry. The normalization itself happens in the binding layer.
+	f, ok := reflect.TypeOf(ExchangeCodeCommand{}).FieldByName("RedirectURI")
+	if !ok {
+		t.Fatal("RedirectURI field not found")
+	}
+	if got := f.Tag.Get("normalize"); got != "uri" {
+		t.Errorf(`RedirectURI normalize tag = %q, want "uri"`, got)
 	}
 }

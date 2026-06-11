@@ -21,7 +21,7 @@ type ExchangeCodeCommand struct {
 	ClientSecret      string `form:"client_secret"`
 	BasicClientID     string `ctx:"basic_client_id"`
 	BasicClientSecret string `ctx:"basic_client_secret"`
-	RedirectURI       string `form:"redirect_uri"  validate:"required,redirect_uri"`
+	RedirectURI       string `form:"redirect_uri"  validate:"required,redirect_uri" normalize:"uri"`
 	ExpireSecs        *int   `form:"expire_secs"   validate:"omitempty,gt=0"`
 	CodeVerifier      string `form:"code_verifier"`
 	// TODO: add DeviceID field and pass it to NewRefreshToken once client support is established

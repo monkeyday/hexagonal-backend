@@ -65,6 +65,11 @@ func bindFromContext(ginCtx *gin.Context, obj any) error {
 			}
 			return true
 		case hasTag(field, "cookie"):
+			// Cookie is a fallback only: an explicit body/query parameter is
+			// authoritative and must not be clobbered by a stale cookie.
+			if !fv.IsZero() {
+				return true
+			}
 			if val, err := ginCtx.Cookie(field.Tag.Get("cookie")); err == nil {
 				setField(fv, val)
 			}
