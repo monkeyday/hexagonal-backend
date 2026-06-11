@@ -189,9 +189,10 @@ func (m *mockCache) GetErr(_ context.Context, key string, dest any) (bool, error
 	}
 	return m.Get(context.TODO(), key, dest), nil
 }
-func (m *mockCache) Delete(_ context.Context, key string)                      { delete(m.items, key) }
-func (m *mockCache) Incr(_ context.Context, _ string) (int64, error)           { return 0, nil }
-func (m *mockCache) Expire(_ context.Context, _ string, _ time.Duration) error { return nil }
+func (m *mockCache) Delete(_ context.Context, key string) { delete(m.items, key) }
+func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (int64, error) {
+	return 0, nil
+}
 
 // ── mock RefreshTokenRepository ───────────────────────────────────────────────
 

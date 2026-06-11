@@ -23,8 +23,3 @@ type ErrInvalidField struct{ cause error }
 func NewErrInvalidField(cause error) *ErrInvalidField { return &ErrInvalidField{cause} }
 func (e *ErrInvalidField) Error() string              { return "repository: invalid field: " + e.cause.Error() }
 func (e *ErrInvalidField) Unwrap() error              { return e.cause }
-
-type Repository[T any] interface {
-	FindByField(field string, value string) (*T, error)
-	Save(item *T) error
-}

@@ -59,9 +59,10 @@ func (m *mockCache) GetAndDelete(_ context.Context, key string, _ any) bool {
 	}
 	return ok
 }
-func (m *mockCache) Delete(_ context.Context, key string)                      { delete(m.items, key) }
-func (m *mockCache) Incr(_ context.Context, _ string) (int64, error)           { return 0, nil }
-func (m *mockCache) Expire(_ context.Context, _ string, _ time.Duration) error { return nil }
+func (m *mockCache) Delete(_ context.Context, key string) { delete(m.items, key) }
+func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (int64, error) {
+	return 0, nil
+}
 
 func newExtractTokenRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)

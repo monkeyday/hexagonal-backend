@@ -38,3 +38,17 @@ func TestHTTPStatusMapper(t *testing.T) {
 		})
 	}
 }
+
+func TestMapHTTPErrorPreservesExplicitHTTPStatus(t *testing.T) {
+	m := &Module{}
+	err := coreerror.NewErrorStruct(11002, http.StatusNotFound, coreerror.ErrNotFound)
+
+	got := m.MapHTTPError(err)
+	httpErr, ok := got.(interface{ HTTPStatus() int })
+	if !ok {
+		t.Fatalf("MapHTTPError returned %T, want HTTPStatus", got)
+	}
+	if httpErr.HTTPStatus() != http.StatusNotFound {
+		t.Fatalf("HTTPStatus = %d, want %d", httpErr.HTTPStatus(), http.StatusNotFound)
+	}
+}

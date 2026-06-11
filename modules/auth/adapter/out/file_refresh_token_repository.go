@@ -94,14 +94,11 @@ func (r *FileRefreshTokenRepository) RevokeByTokenHash(_ context.Context, tokenH
 }
 
 func (r *FileRefreshTokenRepository) RevokeAllForUser(_ context.Context, userID entity.UserID) error {
-	for _, rt := range r.repo.All() {
+	return r.repo.UpdateAll(func(rt *entity.RefreshToken) (bool, error) {
 		if rt.UserID == userID && rt.RevokedAt == nil {
-			cp := *rt
-			cp.RevokedAt = new(time.Now())
-			if err := r.repo.Save(&cp); err != nil {
-				return err
-			}
+			rt.RevokedAt = new(time.Now())
+			return true, nil
 		}
-	}
-	return nil
+		return false, nil
+	})
 }

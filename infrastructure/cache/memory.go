@@ -17,12 +17,27 @@ type cacheItem struct {
 }
 
 type MemoryCache struct {
-	mu    sync.RWMutex
-	items map[string]cacheItem
+	mu      sync.RWMutex
+	items   map[string]cacheItem
+	closeCh chan struct{}
+	once    sync.Once
 }
 
+const janitorInterval = time.Minute
+
 func NewMemoryCache() *MemoryCache {
-	return &MemoryCache{items: make(map[string]cacheItem)}
+	c := &MemoryCache{
+		items:   make(map[string]cacheItem),
+		closeCh: make(chan struct{}),
+	}
+	go c.janitor(janitorInterval)
+	return c
+}
+
+func (c *MemoryCache) Close() {
+	c.once.Do(func() {
+		close(c.closeCh)
+	})
 }
 
 func (c *MemoryCache) Set(_ context.Context, key string, value any, ttl *time.Duration) error {
@@ -37,10 +52,8 @@ func (c *MemoryCache) Set(_ context.Context, key string, value any, ttl *time.Du
 }
 
 func (c *MemoryCache) Get(_ context.Context, key string, dest any) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	item, ok := c.items[key]
-	if !ok || (!item.expiresAt.IsZero() && time.Now().After(item.expiresAt)) {
+	item, ok := c.getLiveItem(key)
+	if !ok {
 		return false
 	}
 	if dest == nil {
@@ -54,10 +67,8 @@ func (c *MemoryCache) Get(_ context.Context, key string, dest any) bool {
 }
 
 func (c *MemoryCache) GetErr(_ context.Context, key string, dest any) (bool, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	item, ok := c.items[key]
-	if !ok || (!item.expiresAt.IsZero() && time.Now().After(item.expiresAt)) {
+	item, ok := c.getLiveItem(key)
+	if !ok {
 		return false, nil
 	}
 	if dest == nil {
@@ -100,12 +111,13 @@ func (c *MemoryCache) Delete(_ context.Context, key string) {
 	delete(c.items, key)
 }
 
-func (c *MemoryCache) Incr(_ context.Context, key string) (int64, error) {
+func (c *MemoryCache) IncrWindow(_ context.Context, key string, window time.Duration) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now()
 	item, ok := c.items[key]
 	if ok {
-		if !item.expiresAt.IsZero() && time.Now().After(item.expiresAt) {
+		if !item.expiresAt.IsZero() && now.After(item.expiresAt) {
 			item = cacheItem{}
 		} else if _, ok := item.value.(int64); !ok {
 			return 0, fmt.Errorf("WRONGTYPE operation against key holding non-integer value")
@@ -117,16 +129,51 @@ func (c *MemoryCache) Incr(_ context.Context, key string) (int64, error) {
 	}
 	val++
 	item.value = val
+	if item.expiresAt.IsZero() {
+		item.expiresAt = now.Add(window)
+	}
 	c.items[key] = item
 	return val, nil
 }
 
-func (c *MemoryCache) Expire(_ context.Context, key string, ttl time.Duration) error {
+func (c *MemoryCache) getLiveItem(key string) (cacheItem, bool) {
+	c.mu.RLock()
+	item, ok := c.items[key]
+	if !ok || item.expiresAt.IsZero() || time.Now().Before(item.expiresAt) {
+		c.mu.RUnlock()
+		return item, ok
+	}
+	c.mu.RUnlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if item, ok := c.items[key]; ok {
-		item.expiresAt = time.Now().Add(ttl)
-		c.items[key] = item
+	item, ok = c.items[key]
+	if ok && !item.expiresAt.IsZero() && time.Now().After(item.expiresAt) {
+		delete(c.items, key)
+		return cacheItem{}, false
 	}
-	return nil
+	return item, ok
+}
+
+func (c *MemoryCache) janitor(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.deleteExpired(time.Now())
+		case <-c.closeCh:
+			return
+		}
+	}
+}
+
+func (c *MemoryCache) deleteExpired(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, item := range c.items {
+		if !item.expiresAt.IsZero() && now.After(item.expiresAt) {
+			delete(c.items, key)
+		}
+	}
 }

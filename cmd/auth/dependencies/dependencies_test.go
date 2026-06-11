@@ -37,6 +37,7 @@ func TestSelectCache(t *testing.T) {
 
 	t.Run("Redis configured and reachable — redis cache used", func(t *testing.T) {
 		want := cache.NewMemoryCache() // stand-in instance; only identity matters
+		t.Cleanup(want.Close)
 		c, err := selectCache("redis.internal:6379", func() (corecache.Cache, error) {
 			return want, nil
 		})

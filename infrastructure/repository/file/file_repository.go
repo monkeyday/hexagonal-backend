@@ -15,7 +15,7 @@ import (
 func (r *FileRepository[T, D]) CreateIfFieldNotExists(field, value string, item *T) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := FindByField(r.items, Field(field), value)
+	_, err := r.findByFieldLocked(Field(field), value)
 	if err == nil {
 		return coreerror.ErrConflict
 	}
@@ -23,15 +23,11 @@ func (r *FileRepository[T, D]) CreateIfFieldNotExists(field, value string, item 
 		return err
 	}
 	id := r.getID(item)
-	docs := make(map[string]*D, len(r.items)+1)
-	for k, v := range r.items {
-		docs[k] = r.toDoc(v)
-	}
-	docs[id] = r.toDoc(item)
-	if err := writeToFile(r.store.filePath, docs); err != nil {
+	if err := r.writeItemsWith(id, item); err != nil {
 		return err
 	}
 	r.items[id] = item
+	r.updateIndexesForItem(id, item)
 	return nil
 }
 
@@ -64,12 +60,13 @@ func NewFileStore(dbDir, fileName string) (*FileStore, error) {
 }
 
 type FileRepository[T any, D any] struct {
-	mu       sync.RWMutex
-	items    map[string]*T
-	store    *FileStore
-	toDoc    func(*T) *D
-	toEntity func(*D) (*T, error)
-	getID    func(*T) string
+	mu            sync.RWMutex
+	items         map[string]*T
+	indexedFields map[Field]map[string]string
+	store         *FileStore
+	toDoc         func(*T) *D
+	toEntity      func(*D) (*T, error)
+	getID         func(*T) string
 }
 
 func New[T any, D any](
@@ -105,30 +102,19 @@ func New[T any, D any](
 	}
 
 	return &FileRepository[T, D]{
-		items:    items,
-		store:    store,
-		toDoc:    toDoc,
-		toEntity: toEntity,
-		getID:    getID,
+		items:         items,
+		indexedFields: make(map[Field]map[string]string),
+		store:         store,
+		toDoc:         toDoc,
+		toEntity:      toEntity,
+		getID:         getID,
 	}, nil
 }
 
 func (r *FileRepository[T, D]) FindByField(field string, value string) (*T, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return FindByField(r.items, Field(field), value)
-}
-
-// All returns live pointers into the repository's internal map.
-// Callers must not modify returned values unless they immediately pass them back to Save.
-func (r *FileRepository[T, D]) All() []*T {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]*T, 0, len(r.items))
-	for _, item := range r.items {
-		result = append(result, item)
-	}
-	return result
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.findByFieldLocked(Field(field), value)
 }
 
 // UpdateByField finds an item by field value and applies update under the write lock,
@@ -137,7 +123,7 @@ func (r *FileRepository[T, D]) UpdateByField(field string, value string, update 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	item, err := FindByField(r.items, Field(field), value)
+	item, err := r.findByFieldLocked(Field(field), value)
 	if err != nil {
 		return err
 	}
@@ -147,15 +133,38 @@ func (r *FileRepository[T, D]) UpdateByField(field string, value string, update 
 	}
 
 	id := r.getID(&cp)
-	docs := make(map[string]*D, len(r.items))
-	for k, v := range r.items {
-		docs[k] = r.toDoc(v)
-	}
-	docs[id] = r.toDoc(&cp)
-	if err := writeToFile(r.store.filePath, docs); err != nil {
+	if err := r.writeItemsWith(id, &cp); err != nil {
 		return err
 	}
 	r.items[id] = &cp
+	r.updateIndexesForItem(id, &cp)
+	return nil
+}
+
+func (r *FileRepository[T, D]) UpdateAll(update func(*T) (bool, error)) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	nextItems := make(map[string]*T, len(r.items))
+	for id, item := range r.items {
+		nextItems[id] = item
+		cp := *item
+		changed, err := update(&cp)
+		if err != nil {
+			return err
+		}
+		if changed {
+			nextItems[id] = &cp
+		}
+	}
+	if sameItems(r.items, nextItems) {
+		return nil
+	}
+	if err := r.writeItems(nextItems); err != nil {
+		return err
+	}
+	r.items = nextItems
+	r.rebuildIndexes()
 	return nil
 }
 
@@ -164,16 +173,105 @@ func (r *FileRepository[T, D]) Save(item *T) error {
 	defer r.mu.Unlock()
 
 	id := r.getID(item)
+	if err := r.writeItemsWith(id, item); err != nil {
+		return err
+	}
+	r.items[id] = item
+	r.updateIndexesForItem(id, item)
+	return nil
+}
+
+func (r *FileRepository[T, D]) findByFieldLocked(field Field, value string) (*T, error) {
+	index, ok := r.indexedFields[field]
+	if !ok {
+		var err error
+		index, err = r.buildIndex(field)
+		if err != nil {
+			return nil, err
+		}
+		r.indexedFields[field] = index
+	}
+	id, ok := index[value]
+	if !ok {
+		return nil, coreerror.ErrNotFound
+	}
+	item, ok := r.items[id]
+	if !ok {
+		delete(index, value)
+		return nil, coreerror.ErrNotFound
+	}
+	return item, nil
+}
+
+func (r *FileRepository[T, D]) buildIndex(field Field) (map[string]string, error) {
+	index := make(map[string]string, len(r.items))
+	for id, item := range r.items {
+		value, ok, err := stringFieldValue(item, field)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			index[value] = id
+		}
+	}
+	return index, nil
+}
+
+func (r *FileRepository[T, D]) updateIndexesForItem(id string, item *T) {
+	for field, index := range r.indexedFields {
+		for value, indexedID := range index {
+			if indexedID == id {
+				delete(index, value)
+			}
+		}
+		if value, ok, err := stringFieldValue(item, field); err == nil && ok {
+			index[value] = id
+		}
+	}
+}
+
+func (r *FileRepository[T, D]) rebuildIndexes() {
+	for field := range r.indexedFields {
+		index, err := r.buildIndex(field)
+		if err != nil {
+			// Drop the index so the next lookup rebuilds it and surfaces the error.
+			delete(r.indexedFields, field)
+			continue
+		}
+		r.indexedFields[field] = index
+	}
+}
+
+func (r *FileRepository[T, D]) writeItems(items map[string]*T) error {
+	docs := make(map[string]*D, len(items))
+	for k, v := range items {
+		docs[k] = r.toDoc(v)
+	}
+	return writeToFile(r.store.filePath, docs)
+}
+
+// writeItemsWith persists the current items with item added or replaced under id,
+// without mutating r.items; the caller applies the in-memory change only after
+// the write succeeds.
+func (r *FileRepository[T, D]) writeItemsWith(id string, item *T) error {
 	docs := make(map[string]*D, len(r.items)+1)
 	for k, v := range r.items {
 		docs[k] = r.toDoc(v)
 	}
 	docs[id] = r.toDoc(item)
-	if err := writeToFile(r.store.filePath, docs); err != nil {
-		return err
+	return writeToFile(r.store.filePath, docs)
+}
+
+func sameItems[T any](a, b map[string]*T) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	r.items[id] = item
-	return nil
+	for k, av := range a {
+		if b[k] != av {
+			return false
+		}
+	}
+	return true
 }
 
 func writeToFile[D any](filePath string, docs map[string]*D) error {

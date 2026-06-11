@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	coreerror "sc/core/error"
 	"sc/handler/web/responder"
@@ -13,6 +14,7 @@ import (
 )
 
 const GrantTypeKey = "grant_type"
+const maxGrantTypeBodyBytes = 1 << 20
 
 func GrantType(allowed []string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
@@ -38,6 +40,11 @@ func GrantType(allowed []string) gin.HandlerFunc {
 }
 
 func jsonGrantType(ctx *gin.Context) string {
+	contentType, _, err := mime.ParseMediaType(ctx.GetHeader("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		return ""
+	}
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxGrantTypeBodyBytes)
 	body, err := io.ReadAll(ctx.Request.Body)
 	if err != nil {
 		return ""

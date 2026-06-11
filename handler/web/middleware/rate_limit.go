@@ -25,7 +25,7 @@ func DistributedRateLimit(c corecache.Cache, limit int64, window time.Duration) 
 		}
 		key := fmt.Sprintf(rateLimitCacheKey, ip)
 		requestCtx := ctx.Request.Context()
-		count, err := c.Incr(requestCtx, key)
+		count, err := c.IncrWindow(requestCtx, key, window)
 		if err != nil {
 			if isFailClosedPath(ctx.FullPath()) {
 				ctx.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
@@ -35,10 +35,6 @@ func DistributedRateLimit(c corecache.Cache, limit int64, window time.Duration) 
 			}
 			ctx.Next() // fail open if cache is down
 			return
-		}
-
-		if count == 1 {
-			_ = c.Expire(requestCtx, key, window)
 		}
 
 		if count > limit {

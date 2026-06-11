@@ -17,7 +17,7 @@ import (
 // either constant when checking error returned from Dispatch().
 const (
 	validationErrCode   = 10001
-	useCaseNotFoundCode = 10002
+	useCaseNotFoundCode = 11002
 )
 
 type Dispatcher interface {

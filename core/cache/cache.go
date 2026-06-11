@@ -18,9 +18,8 @@ type Cache interface {
 	Get(ctx context.Context, key string, dest any) bool
 	GetAndDelete(ctx context.Context, key string, dest any) bool
 	Delete(ctx context.Context, key string)
-	Incr(ctx context.Context, key string) (int64, error)
-	// Expire sets a TTL on an existing key. Zero or negative TTL expires the key
-	// immediately (or effectively immediately — callers must not rely on exact timing).
-	// No-ops silently if the key does not exist.
-	Expire(ctx context.Context, key string, ttl time.Duration) error
+	// IncrWindow atomically increments the counter at key and guarantees it
+	// carries a TTL: the window is applied on first increment and re-applied if
+	// the key has somehow lost its TTL, so a counter can never persist forever.
+	IncrWindow(ctx context.Context, key string, window time.Duration) (int64, error)
 }

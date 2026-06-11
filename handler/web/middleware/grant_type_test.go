@@ -124,6 +124,43 @@ func TestGrantType(t *testing.T) {
 		}
 	})
 
+	t.Run("non-json content type is not read for a grant_type", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		r.POST("/token", GrantType(nil), func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(`{"grant_type":"password"}`))
+		req.Header.Set("Content-Type", "text/plain")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("json body over the read limit is rejected", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		r.POST("/token", GrantType(nil), func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+
+		// Valid JSON, but past maxGrantTypeBodyBytes: MaxBytesReader must cut
+		// the read short so the body is never fully buffered.
+		body := `{"pad":"` + strings.Repeat("x", maxGrantTypeBodyBytes+1) + `","grant_type":"password"}`
+		req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newGrantTypeRouter(tc.allowed)

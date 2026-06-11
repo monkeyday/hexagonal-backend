@@ -93,12 +93,18 @@ func (r *RedisCache) Delete(ctx context.Context, key string) {
 	r.client.Del(ctx, key)
 }
 
-func (r *RedisCache) Incr(ctx context.Context, key string) (int64, error) {
-	return r.client.Incr(ctx, key).Result()
-}
+// incrWindowScript increments and sets the TTL in one atomic round trip.
+// The PTTL < 0 check covers both a fresh key and a key that lost its TTL
+// (e.g. a past Expire failure), so a counter can never persist forever.
+var incrWindowScript = redis.NewScript(`
+local v = redis.call('INCR', KEYS[1])
+if redis.call('PTTL', KEYS[1]) < 0 then
+	redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return v`)
 
-func (r *RedisCache) Expire(ctx context.Context, key string, ttl time.Duration) error {
-	return r.client.Expire(ctx, key, ttl).Err()
+func (r *RedisCache) IncrWindow(ctx context.Context, key string, window time.Duration) (int64, error) {
+	return incrWindowScript.Run(ctx, r.client, []string{key}, window.Milliseconds()).Int64()
 }
 
 func (r *RedisCache) Close() error {

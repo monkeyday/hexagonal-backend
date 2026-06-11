@@ -12,10 +12,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func newRateLimitRouter(limit int64, window time.Duration) *gin.Engine {
+func newRateLimitRouter(t *testing.T, limit int64, window time.Duration) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	c := cache.NewMemoryCache()
+	t.Cleanup(c.Close)
 	router.GET("/", DistributedRateLimit(c, limit, window), func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
@@ -32,7 +33,7 @@ func doRequest(r *gin.Engine, ip string) int {
 
 func TestRateLimit(t *testing.T) {
 	t.Run("requests within limit are allowed", func(t *testing.T) {
-		r := newRateLimitRouter(3, time.Minute)
+		r := newRateLimitRouter(t, 3, time.Minute)
 		for i := range 3 {
 			if code := doRequest(r, "1.2.3.4"); code != http.StatusOK {
 				t.Fatalf("request %d: status = %d, want 200", i+1, code)
@@ -41,7 +42,7 @@ func TestRateLimit(t *testing.T) {
 	})
 
 	t.Run("request exceeding limit is rejected with 429", func(t *testing.T) {
-		r := newRateLimitRouter(2, time.Minute)
+		r := newRateLimitRouter(t, 2, time.Minute)
 		doRequest(r, "2.3.4.5")
 		doRequest(r, "2.3.4.5")
 		if code := doRequest(r, "2.3.4.5"); code != http.StatusTooManyRequests {
@@ -50,7 +51,7 @@ func TestRateLimit(t *testing.T) {
 	})
 
 	t.Run("different IPs have independent limits", func(t *testing.T) {
-		r := newRateLimitRouter(1, time.Minute)
+		r := newRateLimitRouter(t, 1, time.Minute)
 		// exhaust IP A
 		doRequest(r, "10.0.0.1")
 		if code := doRequest(r, "10.0.0.1"); code != http.StatusTooManyRequests {
@@ -63,7 +64,7 @@ func TestRateLimit(t *testing.T) {
 	})
 
 	t.Run("limit=1 allows exactly one request", func(t *testing.T) {
-		r := newRateLimitRouter(1, time.Minute)
+		r := newRateLimitRouter(t, 1, time.Minute)
 		if code := doRequest(r, "5.5.5.5"); code != http.StatusOK {
 			t.Fatalf("first request: want 200, got %d", code)
 		}
@@ -75,7 +76,9 @@ func TestRateLimit(t *testing.T) {
 	t.Run("empty RemoteAddr is rejected with 429", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		r := gin.New()
-		r.GET("/", DistributedRateLimit(cache.NewMemoryCache(), 1, time.Minute), func(c *gin.Context) {
+		mc := cache.NewMemoryCache()
+		t.Cleanup(mc.Close)
+		r.GET("/", DistributedRateLimit(mc, 1, time.Minute), func(c *gin.Context) {
 			c.Status(http.StatusOK)
 		})
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -123,6 +126,18 @@ func TestRateLimit(t *testing.T) {
 			t.Fatalf("status = %d, want 200", w.Code)
 		}
 	})
+
+	t.Run("window elapsing resets the limit", func(t *testing.T) {
+		r := newRateLimitRouter(t, 1, 5*time.Millisecond)
+		doRequest(r, "7.7.7.7")
+		if code := doRequest(r, "7.7.7.7"); code != http.StatusTooManyRequests {
+			t.Fatalf("within window: status = %d, want 429", code)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if code := doRequest(r, "7.7.7.7"); code != http.StatusOK {
+			t.Fatalf("after window: status = %d, want 200", code)
+		}
+	})
 }
 
 type errCache struct{}
@@ -132,5 +147,6 @@ func (errCache) Get(context.Context, string, any) bool                  { return
 func (errCache) GetErr(context.Context, string, any) (bool, error)      { return false, nil }
 func (errCache) GetAndDelete(context.Context, string, any) bool         { return false }
 func (errCache) Delete(context.Context, string)                         {}
-func (errCache) Incr(context.Context, string) (int64, error)            { return 0, errors.New("cache down") }
-func (errCache) Expire(context.Context, string, time.Duration) error    { return nil }
+func (errCache) IncrWindow(context.Context, string, time.Duration) (int64, error) {
+	return 0, errors.New("cache down")
+}

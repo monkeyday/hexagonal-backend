@@ -70,6 +70,9 @@ func (m *Module) MapHTTPError(err error) error {
 	if !ok {
 		return err
 	}
+	if hs, ok := err.(interface{ HTTPStatus() int }); ok && hs.HTTPStatus() != 0 {
+		return coreerror.NewErrorStruct(e.Code(), hs.HTTPStatus(), err)
+	}
 	return coreerror.NewErrorStruct(e.Code(), httpStatusMapper(e.Code()), err)
 }
 
