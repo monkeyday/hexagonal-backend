@@ -71,6 +71,7 @@ func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
 
 	oidc := r.Group("/oidc")
 	oidc.GET("/logout", middleware.ExtractAccessToken(), webHandler.Handle[command.LogoutCommand](ro.module))
+	oidc.POST("/logout", middleware.ExtractAccessToken(), webHandler.Handle[command.LogoutCommand](ro.module))
 	oidc.Use(auth)
 	oidc.GET("/me", webHandler.Handle[query.GetProfileQuery](ro.module))
 	oidc.POST("/revoke", webHandler.Handle[command.RevokeTokenCommand](ro.module))

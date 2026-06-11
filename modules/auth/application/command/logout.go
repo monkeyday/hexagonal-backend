@@ -17,8 +17,6 @@ import (
 
 type LogoutCommand struct {
 	AccessToken           *string `ctx:"access_token"`
-	RefreshToken          *string `cookie:"refresh_token"`
-	IDTokenHint           *string `form:"id_token_hint"`
 	PostLogoutRedirectURI *string `form:"post_logout_redirect_uri"`
 }
 
@@ -41,20 +39,7 @@ func NewLogoutUseCase(deps define.Dependencies) usecase.UseCase {
 func (uc *LogoutUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*LogoutCommand)
 
-	var accessClaims *corejwt.Claims
-	if c.AccessToken != nil {
-		if claims, err := uc.jwtSvc.ParseJWT(*c.AccessToken); err == nil && claims != nil {
-			accessClaims = claims
-		}
-	}
-
-	if accessClaims != nil {
-		uc.blacklistAccessToken(ctx, accessClaims)
-	}
-
-	if userID := uc.resolveUserID(ctx, accessClaims, c.IDTokenHint, c.RefreshToken); userID != "" {
-		_ = uc.refreshTokenRepo.RevokeAllForUser(ctx, entity.UserID(userID))
-	}
+	uc.revokeIfAuthenticated(ctx, c.AccessToken)
 
 	resp := &define.LogoutResponse{}
 	if c.PostLogoutRedirectURI != nil && slices.Contains(uc.postLogoutRedirectAllowlist, *c.PostLogoutRedirectURI) {
@@ -63,23 +48,22 @@ func (uc *LogoutUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	return resp, nil
 }
 
-// resolveUserID returns the subject of the actor making the logout request.
-// Priority: access token (caller-bound) → id_token_hint → refresh_token cookie (repo lookup).
-func (uc *LogoutUseCase) resolveUserID(ctx context.Context, accessClaims *corejwt.Claims, idTokenHint, refreshToken *string) string {
-	if accessClaims != nil && accessClaims.Subject != "" {
-		return accessClaims.Subject
+// revokeIfAuthenticated revokes sessions only for a caller presenting a valid
+// bearer access token. id_token_hint or the refresh cookie alone must never
+// trigger revocation: both ride along on cross-site GET navigations, which
+// would let an attacker log a victim out of everything (CSRF).
+func (uc *LogoutUseCase) revokeIfAuthenticated(ctx context.Context, accessToken *string) {
+	if accessToken == nil {
+		return
 	}
-	if idTokenHint != nil {
-		if claims, err := uc.jwtSvc.ParseIDToken(*idTokenHint); err == nil && claims != nil {
-			return claims.Subject
-		}
+	claims, err := uc.jwtSvc.ParseJWT(*accessToken)
+	if err != nil || claims == nil {
+		return
 	}
-	if refreshToken != nil {
-		if rt, err := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(*refreshToken)); err == nil && rt != nil && rt.IsValid() {
-			return string(rt.UserID)
-		}
+	uc.blacklistAccessToken(ctx, claims)
+	if claims.Subject != "" {
+		_ = uc.refreshTokenRepo.RevokeAllForUser(ctx, entity.UserID(claims.Subject))
 	}
-	return ""
 }
 
 func (uc *LogoutUseCase) blacklistAccessToken(ctx context.Context, claims *corejwt.Claims) {

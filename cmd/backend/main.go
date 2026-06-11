@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -34,7 +35,7 @@ const (
 	RedirectURI            = "http://" + ListenHost + "/callback"
 	Scope                  = "openid profile email"
 	sessionCookieName      = "session_id"
-	refreshTokenCookieName = "refresh_token"
+	csrfTokenField         = "csrf_token"
 	sessionMaxAge          = 86400
 	refreshThreshold       = 1 * time.Minute
 )
@@ -51,6 +52,7 @@ type sessionData struct {
 	tokenResponse
 	ExpiresAt    time.Time
 	LastResponse string
+	CSRFToken    string
 }
 
 type pendingAuth struct {
@@ -144,6 +146,7 @@ func setSession(w http.ResponseWriter, id string, tok tokenResponse) {
 	sessionsMu.Lock()
 	if current, ok := sessions[id]; ok {
 		data.LastResponse = current.LastResponse
+		data.CSRFToken = current.CSRFToken
 	}
 	sessions[id] = data
 	sessionsMu.Unlock()
@@ -224,6 +227,43 @@ func requireRefreshToken(w http.ResponseWriter, r *http.Request) (tokenResponse,
 	return tok, id, true
 }
 
+func setCSRFToken(id, token string) {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	data, ok := sessions[id]
+	if !ok {
+		return
+	}
+	data.CSRFToken = token
+	sessions[id] = data
+}
+
+func csrfToken(r *http.Request) string {
+	id, ok := sessionID(r)
+	if !ok {
+		return ""
+	}
+	sessionsMu.RLock()
+	defer sessionsMu.RUnlock()
+	return sessions[id].CSRFToken
+}
+
+// requirePOSTWithCSRF guards state-changing actions: cross-site requests can
+// neither POST our forms with the per-session token nor read it, so a bare
+// <img>/link navigation cannot trigger logout/revoke/refresh.
+func requirePOSTWithCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	token := csrfToken(r)
+	if token == "" || subtle.ConstantTimeCompare([]byte(r.FormValue(csrfTokenField)), []byte(token)) != 1 {
+		http.Error(w, "invalid csrf token", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func clearSession(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err == nil {
@@ -245,14 +285,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	tok, hasToken := getSessionWithRefresh(w, r)
 	buttons := `<a href="/login" class="btn">Login with IdP</a>  <a href="/forgot-password" class="btn btn-secondary">Forgot Password</a>`
 	if hasToken {
-		buttons = `
-			<a href="/refresh"        class="btn btn-secondary">Refresh Token</a>
+		csrf := html.EscapeString(csrfToken(r))
+		buttons = actionForm("/refresh", "Refresh Token", "btn-secondary", csrf) + `
 			<a href="/userinfo"       class="btn btn-secondary">UserInfo</a>
 			<a href="/update-profile" class="btn btn-secondary">Update Profile</a>
-			<a href="/revoke"         class="btn btn-warning">Revoke Token</a>
 			<a href="/introspect"     class="btn btn-info">Introspect Token</a>
-			<a href="/logout"         class="btn btn-danger">Logout</a>
-		`
+		` + actionForm("/revoke", "Revoke Token", "btn-warning", csrf) +
+			actionForm("/logout", "Logout", "btn-danger", csrf)
 	}
 
 	responseSection := ""
@@ -275,6 +314,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		.btn-info      { background-color: #17a2b8; }
 		.btn-danger    { background-color: #dc3545; }
 		.btn:hover     { opacity: 0.85; }
+		form.inline    { display: inline-block; margin: 0; }
 		.response      { margin-top: 1.5rem; text-align: left; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; overflow-x: auto; }
 		.response pre  { margin: 0; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
 	</style>
@@ -288,6 +328,13 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	</div>
 </body>
 </html>`, statusText(tok, hasToken), buttons, responseSection)
+}
+
+// actionForm renders a state-changing action as a POST form carrying the
+// per-session CSRF token; these must never be plain GET links.
+func actionForm(action, label, btnClass, csrf string) string {
+	return fmt.Sprintf(`<form method="POST" action="%s" class="inline"><input type="hidden" name="%s" value="%s"><button type="submit" class="btn %s">%s</button></form>`,
+		action, csrfTokenField, csrf, btnClass, label)
 }
 
 func statusText(tok tokenResponse, hasToken bool) string {
@@ -372,13 +419,22 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to generate session", http.StatusInternalServerError)
 		return
 	}
+	csrf, err := generateRandom(32)
+	if err != nil {
+		http.Error(w, "failed to generate csrf token", http.StatusInternalServerError)
+		return
+	}
 	setSession(w, sessionID, *tok)
+	setCSRFToken(sessionID, csrf)
 	setLastResponse(sessionID, prettyJSON(tok))
 	fmt.Printf("[+] Access token: %s…\n", tok.AccessToken[:min(10, len(tok.AccessToken))])
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if !requirePOSTWithCSRF(w, r) {
+		return
+	}
 	tok, sessionID, ok := requireRefreshToken(w, r)
 	if !ok {
 		return
@@ -403,6 +459,9 @@ func handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRevoke(w http.ResponseWriter, r *http.Request) {
+	if !requirePOSTWithCSRF(w, r) {
+		return
+	}
 	tok, ok := requireSessionToken(w, r)
 	if !ok {
 		return
@@ -466,21 +525,23 @@ func handleUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !requirePOSTWithCSRF(w, r) {
+		return
+	}
 	tok, ok := requireLogoutToken(w, r)
 	if !ok {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodGet, LogoutEndpoint, nil)
+	// The IdP only revokes for bearer-authenticated logout; the refresh
+	// cookie is no longer sent because it no longer proves the actor.
+	req, err := http.NewRequest(http.MethodPost, LogoutEndpoint, nil)
 	if err != nil {
 		http.Error(w, "logout failed", http.StatusInternalServerError)
 		return
 	}
 	if tok.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
-	}
-	if tok.RefreshToken != "" {
-		req.AddCookie(&http.Cookie{Name: refreshTokenCookieName, Value: tok.RefreshToken})
 	}
 
 	resp, err := http.DefaultClient.Do(req)
