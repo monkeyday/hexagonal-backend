@@ -95,6 +95,9 @@ func buildUserUpdate(doc *userDoc) bson.D {
 	if doc.SessionsInvalidatedAt == nil {
 		unset = append(unset, bson.E{Key: "sessions_invalidated_at", Value: ""})
 	}
+	if doc.LockedUntil == nil {
+		unset = append(unset, bson.E{Key: "locked_until", Value: ""})
+	}
 	if len(unset) > 0 {
 		update = append(update, bson.E{Key: "$unset", Value: unset})
 	}

@@ -51,9 +51,27 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 		return nil, autherrors.NewErrInvalidEmailOrPassword()
 	}
 
+	// Generic error for locked accounts: no enumeration oracle, and no
+	// confirmation that a guessed password was correct.
+	if user.IsLockedOut() {
+		log.Warn().Str("user_id", string(user.ID)).Msg("password grant rejected: account locked")
+		return nil, autherrors.NewErrInvalidEmailOrPassword()
+	}
+
 	if err := user.ValidatePassword(q.Password); err != nil {
 		log.Warn().Str("email", q.Email).Msg("password not matched")
+		user.RecordFailedLogin()
+		if saveErr := uc.userRepo.Save(ctx, user); saveErr != nil {
+			log.Warn().Err(saveErr).Str("user_id", string(user.ID)).Msg("failed to persist account login failure")
+		}
 		return nil, autherrors.NewErrInvalidEmailOrPassword()
+	}
+
+	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+		user.ResetFailedLogins()
+		if saveErr := uc.userRepo.Save(ctx, user); saveErr != nil {
+			log.Warn().Err(saveErr).Str("user_id", string(user.ID)).Msg("failed to reset account login failures")
+		}
 	}
 
 	scope, err := uc.resolveScope(q.Scope)

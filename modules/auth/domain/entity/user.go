@@ -12,6 +12,14 @@ import (
 
 const PasswordResetTokenTTL = 15 * time.Minute
 
+const (
+	// MaxFailedLoginAttempts is the account-level threshold; at and beyond it
+	// the account is locked with exponentially increasing duration.
+	MaxFailedLoginAttempts = 5
+	lockoutBaseDuration    = 1 * time.Minute
+	lockoutMaxDuration     = 1 * time.Hour
+)
+
 // TODO: rename User → Identity and narrow it to auth-only fields (ID, Email, PasswordHash,
 // EmailVerified, PasswordResetTokenHash, PasswordResetExpiresAt) once a separate user module
 // is introduced. Profile fields (Username, Nickname, CreatedAt, UpdatedAt) belong in the user
@@ -29,6 +37,8 @@ type User struct {
 	PasswordResetTokenHash *string    // SHA-256 hex of the raw reset token; nil means no active reset
 	PasswordResetExpiresAt *time.Time // nil means no active reset
 	SessionsInvalidatedAt  *time.Time // refresh tokens issued at or before this time are rejected
+	FailedLoginAttempts    int
+	LockedUntil            *time.Time // nil means not locked
 }
 
 type UserArgs struct {
@@ -89,6 +99,36 @@ func validatePassword(p string) error {
 
 func (u *User) ValidatePassword(password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+}
+
+func (u *User) IsLockedOut() bool {
+	return u.LockedUntil != nil && time.Now().Before(*u.LockedUntil)
+}
+
+// RecordFailedLogin increments the account-level failure counter and, from
+// MaxFailedLoginAttempts on, locks the account with exponential backoff:
+// 1m, 2m, 4m, ... capped at lockoutMaxDuration.
+func (u *User) RecordFailedLogin() {
+	u.FailedLoginAttempts++
+	if u.FailedLoginAttempts >= MaxFailedLoginAttempts {
+		u.LockedUntil = new(time.Now().Add(lockoutDuration(u.FailedLoginAttempts - MaxFailedLoginAttempts)))
+	}
+	u.UpdatedAt = time.Now()
+}
+
+func (u *User) ResetFailedLogins() {
+	u.FailedLoginAttempts = 0
+	u.LockedUntil = nil
+	u.UpdatedAt = time.Now()
+}
+
+func lockoutDuration(attemptsOverThreshold int) time.Duration {
+	const maxDoublings = 6 // 1m << 6 = 64m, already past the cap
+	if attemptsOverThreshold > maxDoublings {
+		return lockoutMaxDuration
+	}
+	d := lockoutBaseDuration << attemptsOverThreshold
+	return min(d, lockoutMaxDuration)
 }
 
 type UpdateProfileArgs struct {

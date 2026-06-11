@@ -9,6 +9,7 @@ import (
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
 	"testing"
+	"time"
 )
 
 func TestGetTokenUseCase(t *testing.T) {
@@ -190,4 +191,65 @@ func TestGetTokenUseCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetToken_AccountLockout(t *testing.T) {
+	ctx := context.Background()
+
+	newUC := func(user *entity.User) (usecase.UseCase, *mockUserRepo) {
+		repo := newMockRepo(user)
+		uc := NewGetTokenUseCase(define.Dependencies{
+			UserRepo:         repo,
+			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			JWTSvc:           &mockJwtService{accessToken: "at", refreshToken: "rt"},
+			ScopeAllowlist:   []string{"openid"},
+		})
+		return uc, repo
+	}
+
+	wantInvalidCreds := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.InvalidEmailOrPassword {
+			t.Fatalf("got err %v, want InvalidEmailOrPassword", err)
+		}
+	}
+
+	t.Run("locked account with correct password — generic error", func(t *testing.T) {
+		user := newTestUser()
+		user.FailedLoginAttempts = entity.MaxFailedLoginAttempts
+		user.LockedUntil = new(time.Now().Add(time.Hour))
+		uc, _ := newUC(user)
+
+		_, err := uc.Execute(ctx, &GetTokenQuery{Email: user.Email, Password: "Password1!"})
+		wantInvalidCreds(t, err)
+	})
+
+	t.Run("repeated wrong passwords lock the account", func(t *testing.T) {
+		user := newTestUser()
+		uc, _ := newUC(user)
+
+		for i := 0; i < entity.MaxFailedLoginAttempts; i++ {
+			_, err := uc.Execute(ctx, &GetTokenQuery{Email: user.Email, Password: "Wrong1!pass"})
+			wantInvalidCreds(t, err)
+		}
+		if user.LockedUntil == nil {
+			t.Fatal("account must be locked after MaxFailedLoginAttempts failures")
+		}
+	})
+
+	t.Run("successful login resets failures", func(t *testing.T) {
+		user := newTestUser()
+		user.FailedLoginAttempts = entity.MaxFailedLoginAttempts - 1
+		uc, _ := newUC(user)
+
+		if _, err := uc.Execute(ctx, &GetTokenQuery{Email: user.Email, Password: "Password1!"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if user.FailedLoginAttempts != 0 {
+			t.Errorf("FailedLoginAttempts = %d, want 0", user.FailedLoginAttempts)
+		}
+	})
 }

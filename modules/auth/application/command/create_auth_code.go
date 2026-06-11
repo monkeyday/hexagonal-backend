@@ -87,8 +87,17 @@ func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session 
 		return "", err
 	}
 
+	// Account lockout is checked before password validation and answered with
+	// the generic credentials error: a locked account must not become an
+	// enumeration oracle, nor confirm that a guessed password was correct.
+	if user != nil && user.IsLockedOut() {
+		log.Warn().Str("user_id", string(user.ID)).Msg("sign-in rejected: account locked")
+		return "", autherrors.NewErrInvalidEmailOrPassword()
+	}
+
 	if user == nil || user.ValidatePassword(password) != nil {
 		log.Warn().Str("email", email).Msg("sign-in failed: invalid credentials")
+		uc.recordAccountFailure(ctx, user)
 
 		sessionKey := fmt.Sprintf(define.AuthorizeRequestCacheKey, session.ID)
 		session.RequestFail()
@@ -103,5 +112,27 @@ func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session 
 
 		return "", autherrors.NewErrInvalidEmailOrPassword()
 	}
+
+	uc.resetAccountFailures(ctx, user)
 	return user.ID, nil
+}
+
+func (uc *CreateAuthCodeUseCase) recordAccountFailure(ctx context.Context, user *entity.User) {
+	if user == nil {
+		return
+	}
+	user.RecordFailedLogin()
+	if err := uc.userRepo.Save(ctx, user); err != nil {
+		log.Warn().Err(err).Str("user_id", string(user.ID)).Msg("failed to persist account login failure")
+	}
+}
+
+func (uc *CreateAuthCodeUseCase) resetAccountFailures(ctx context.Context, user *entity.User) {
+	if user.FailedLoginAttempts == 0 && user.LockedUntil == nil {
+		return
+	}
+	user.ResetFailedLogins()
+	if err := uc.userRepo.Save(ctx, user); err != nil {
+		log.Warn().Err(err).Str("user_id", string(user.ID)).Msg("failed to reset account login failures")
+	}
 }

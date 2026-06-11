@@ -356,3 +356,73 @@ func TestCreateAuthCodeUseCase_WrongPasswordPreservesSession(t *testing.T) {
 		t.Fatalf("retry with correct password failed: %v", err)
 	}
 }
+
+func TestCreateAuthCode_AccountLockout(t *testing.T) {
+	ctx := context.Background()
+
+	// Each attempt uses a fresh /authorize session, so the per-session
+	// counter never trips — only the account-level lockout is exercised.
+	attempt := func(t *testing.T, userRepo *mockUserRepo, password string) error {
+		t.Helper()
+		session := mustNewSession(t, entity.AuthorizeRequestArgs{
+			ClientID:    "client-123",
+			RedirectURI: "https://app.example.com/callback",
+			Scope:       "openid",
+		})
+		cache := newMockCache().seed(fmt.Sprintf(define.AuthorizeRequestCacheKey, string(session.ID)), session)
+		uc := &CreateAuthCodeUseCase{userRepo: userRepo, cache: cache}
+		_, err := uc.Execute(ctx, &CreateAuthCodeCommand{
+			Email:     "test@example.com",
+			Password:  password,
+			CSRFToken: session.CSRFToken,
+			SessionID: string(session.ID),
+		})
+		return err
+	}
+
+	wantCode := func(t *testing.T, err error, want coreerror.ErrCode) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != want {
+			t.Fatalf("got err %v, want err_code %d", err, want)
+		}
+	}
+
+	t.Run("failures across different sessions lock the account", func(t *testing.T) {
+		user := newTestUser()
+		userRepo := newMockRepo(user)
+
+		for i := 0; i < entity.MaxFailedLoginAttempts; i++ {
+			wantCode(t, attempt(t, userRepo, "Wrong1!pass"), autherrors.InvalidEmailOrPassword)
+		}
+		if user.LockedUntil == nil {
+			t.Fatal("account must be locked after MaxFailedLoginAttempts failures")
+		}
+
+		// Correct password on a locked account: same generic error (no oracle).
+		wantCode(t, attempt(t, userRepo, "Password1!"), autherrors.InvalidEmailOrPassword)
+	})
+
+	t.Run("successful login resets the counter", func(t *testing.T) {
+		user := newTestUser()
+		userRepo := newMockRepo(user)
+
+		for i := 0; i < entity.MaxFailedLoginAttempts-1; i++ {
+			wantCode(t, attempt(t, userRepo, "Wrong1!pass"), autherrors.InvalidEmailOrPassword)
+		}
+		if err := attempt(t, userRepo, "Password1!"); err != nil {
+			t.Fatalf("login below threshold must succeed, got %v", err)
+		}
+		if user.FailedLoginAttempts != 0 || user.LockedUntil != nil {
+			t.Errorf("successful login must reset failures, got attempts=%d locked=%v", user.FailedLoginAttempts, user.LockedUntil)
+		}
+
+		// One more failure after the reset must not lock.
+		wantCode(t, attempt(t, userRepo, "Wrong1!pass"), autherrors.InvalidEmailOrPassword)
+		if user.LockedUntil != nil {
+			t.Error("a single failure after reset must not lock the account")
+		}
+	})
+}

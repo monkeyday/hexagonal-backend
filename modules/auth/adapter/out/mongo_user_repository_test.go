@@ -22,28 +22,41 @@ func TestBuildUserUpdate(t *testing.T) {
 				"password_reset_token_hash",
 				"password_reset_expires_at",
 				"sessions_invalidated_at",
+				"locked_until",
 			},
 		},
 		{
-			name: "active reset token — nothing about it unset",
+			name: "all pointer fields set — nothing unset",
+			doc: &userDoc{
+				ID:                     "user-1",
+				PasswordResetTokenHash: new("hash-abc"),
+				PasswordResetExpiresAt: new(now),
+				SessionsInvalidatedAt:  new(now),
+				LockedUntil:            new(now),
+			},
+			wantUnset: nil,
+		},
+		{
+			name: "reset consumed but sessions invalidated and account locked — only reset fields unset",
+			doc: &userDoc{
+				ID:                    "user-1",
+				SessionsInvalidatedAt: new(now),
+				LockedUntil:           new(now),
+			},
+			wantUnset: []string{
+				"password_reset_token_hash",
+				"password_reset_expires_at",
+			},
+		},
+		{
+			name: "lock expired and cleared — locked_until unset",
 			doc: &userDoc{
 				ID:                     "user-1",
 				PasswordResetTokenHash: new("hash-abc"),
 				PasswordResetExpiresAt: new(now),
 				SessionsInvalidatedAt:  new(now),
 			},
-			wantUnset: nil,
-		},
-		{
-			name: "reset consumed but sessions invalidated — only reset fields unset",
-			doc: &userDoc{
-				ID:                    "user-1",
-				SessionsInvalidatedAt: new(now),
-			},
-			wantUnset: []string{
-				"password_reset_token_hash",
-				"password_reset_expires_at",
-			},
+			wantUnset: []string{"locked_until"},
 		},
 	}
 

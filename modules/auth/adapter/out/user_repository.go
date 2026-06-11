@@ -60,6 +60,8 @@ type userDoc struct {
 	PasswordResetTokenHash *string    `json:"password_reset_token_hash,omitempty" bson:"password_reset_token_hash,omitempty"`
 	PasswordResetExpiresAt *time.Time `json:"password_reset_expires_at,omitempty" bson:"password_reset_expires_at,omitempty"`
 	SessionsInvalidatedAt  *time.Time `json:"sessions_invalidated_at,omitempty"   bson:"sessions_invalidated_at,omitempty"`
+	FailedLoginAttempts    int        `json:"failed_login_attempts"               bson:"failed_login_attempts"`
+	LockedUntil            *time.Time `json:"locked_until,omitempty"              bson:"locked_until,omitempty"`
 	CreatedAt              time.Time  `json:"created_at"               bson:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"               bson:"updated_at"`
 }
@@ -75,6 +77,8 @@ func toDoc(u *entity.User) *userDoc {
 		PasswordResetTokenHash: u.PasswordResetTokenHash,
 		PasswordResetExpiresAt: u.PasswordResetExpiresAt,
 		SessionsInvalidatedAt:  u.SessionsInvalidatedAt,
+		FailedLoginAttempts:    u.FailedLoginAttempts,
+		LockedUntil:            u.LockedUntil,
 		CreatedAt:              u.CreatedAt,
 		UpdatedAt:              u.UpdatedAt,
 	}
@@ -91,6 +95,8 @@ func toEntity(d *userDoc) (*entity.User, error) {
 		PasswordResetTokenHash: d.PasswordResetTokenHash,
 		PasswordResetExpiresAt: d.PasswordResetExpiresAt,
 		SessionsInvalidatedAt:  d.SessionsInvalidatedAt,
+		FailedLoginAttempts:    d.FailedLoginAttempts,
+		LockedUntil:            d.LockedUntil,
 		CreatedAt:              d.CreatedAt,
 		UpdatedAt:              d.UpdatedAt,
 	}, nil
