@@ -7,21 +7,33 @@ import (
 	corecache "sc/core/cache"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
+	"sc/modules/auth/application/service"
+	autherrors "sc/modules/auth/errors"
 	"sc/modules/auth/port"
 )
 
 type IntrospectTokenQuery struct {
-	Token         string  `form:"token"           json:"token"           validate:"required"`
-	TokenTypeHint *string `form:"token_type_hint" json:"token_type_hint" validate:"omitempty,oneof=access_token refresh_token"`
+	CallerID          string  `ctx:"user_id"`
+	ClientID          string  `form:"client_id" json:"client_id"`
+	ClientSecret      string  `form:"client_secret" json:"client_secret"`
+	BasicClientID     string  `ctx:"basic_client_id"`
+	BasicClientSecret string  `ctx:"basic_client_secret"`
+	Token             string  `form:"token"           json:"token"           validate:"required"`
+	TokenTypeHint     *string `form:"token_type_hint" json:"token_type_hint" validate:"omitempty,oneof=access_token refresh_token"`
 }
 
 type IntrospectTokenUseCase struct {
-	jwtSvc port.TokenParser
-	cache  corecache.ReadErrorCache
+	jwtSvc              port.TokenParser
+	cache               corecache.ReadErrorCache
+	clientAuthenticator *service.ClientAuthenticator
 }
 
 func NewIntrospectTokenUseCase(deps define.Dependencies) usecase.UseCase {
-	return &IntrospectTokenUseCase{jwtSvc: deps.JWTSvc, cache: deps.Cache}
+	return &IntrospectTokenUseCase{
+		jwtSvc:              deps.JWTSvc,
+		cache:               deps.Cache,
+		clientAuthenticator: service.NewClientAuthenticator(deps.ClientRegistry),
+	}
 }
 
 // Execute introspects the submitted token per RFC 7662.
@@ -30,6 +42,10 @@ func NewIntrospectTokenUseCase(deps define.Dependencies) usecase.UseCase {
 // always return inactive regardless of hint.
 func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, error) {
 	query := q.(*IntrospectTokenQuery)
+
+	if err := uc.authorizeCaller(ctx, query); err != nil {
+		return nil, err
+	}
 
 	claims, err := uc.jwtSvc.ParseJWT(query.Token)
 	if err != nil || claims == nil {
@@ -62,4 +78,27 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 		resp.JWTID = claims.ID
 	}
 	return resp, nil
+}
+
+// authorizeCaller enforces RFC 7662 §2.1: introspection must never be open.
+// Accepted callers: a valid bearer token (verified by the middleware) or an
+// authenticated confidential client. A bare public client_id is not
+// authentication — allowing it would turn introspection into a token oracle.
+func (uc *IntrospectTokenUseCase) authorizeCaller(ctx context.Context, q *IntrospectTokenQuery) error {
+	if q.CallerID != "" {
+		return nil
+	}
+	if q.ClientID == "" && q.BasicClientID == "" {
+		return autherrors.NewErrInvalidClient()
+	}
+	client, err := uc.clientAuthenticator.Authenticate(ctx, service.ClientCredentials{
+		ClientID:      q.ClientID,
+		FormSecret:    q.ClientSecret,
+		BasicClientID: q.BasicClientID,
+		BasicSecret:   q.BasicClientSecret,
+	})
+	if err != nil || client.IsPublic() {
+		return autherrors.NewErrInvalidClient()
+	}
+	return nil
 }

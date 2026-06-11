@@ -234,6 +234,21 @@ export default function (tokens) {
       { headers: rh, responseCallback: expectedStatuses(400) },
     );
     check(missing, { 'missing token: status 400': (r) => r.status === 400 });
+
+    // RFC 7009: a registered client may revoke without a bearer token.
+    const clientAuth = http.post(
+      `${BASE_URL}/oidc/revoke`,
+      JSON.stringify({ token: getTokens().refresh_token, client_id: 'smoke-client' }),
+      { headers: JSON_HEADERS },
+    );
+    check(clientAuth, { 'client-authenticated revoke: status 200': (r) => r.status === 200 });
+
+    const anonymous = http.post(
+      `${BASE_URL}/oidc/revoke`,
+      JSON.stringify({ token: 'whatever' }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(401) },
+    );
+    check(anonymous, { 'anonymous revoke: status 401': (r) => r.status === 401 });
   });
 
   // ── POST /oidc/introspect ─────────────────────────────────────────────────────
@@ -261,6 +276,22 @@ export default function (tokens) {
       'inactive: status 200':   (r) => r.status === 200,
       'inactive: active=false': (r) => r.json('active') === false,
     });
+
+    // RFC 7662 §2.1: introspection must never be open; a public client_id
+    // alone is not authentication either.
+    const anonymous = http.post(
+      `${BASE_URL}/oidc/introspect`,
+      JSON.stringify({ token: fresh.access_token }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(401) },
+    );
+    check(anonymous, { 'anonymous introspect: status 401': (r) => r.status === 401 });
+
+    const publicClient = http.post(
+      `${BASE_URL}/oidc/introspect`,
+      JSON.stringify({ token: fresh.access_token, client_id: 'smoke-client' }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(401) },
+    );
+    check(publicClient, { 'public client_id introspect: status 401': (r) => r.status === 401 });
   });
 
   // ── GET /oidc/logout ──────────────────────────────────────────────────────────

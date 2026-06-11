@@ -27,6 +27,10 @@ func TestRevokeTokenUseCase(t *testing.T) {
 			JWTSvc:           jwtSvc,
 			Cache:            cache,
 			RefreshTokenRepo: rtRepo,
+			ClientRegistry: newMockClientRegistry(
+				newTestClient(t, "public-client", entity.ClientAuthNone),
+				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
+			),
 		}))
 		return mod
 	}
@@ -150,7 +154,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 	})
 
 	t.Run("unknown token — not an error (RFC 7009)", func(t *testing.T) {
-		_, err := newMod(&mockJwtService{}, newMockCache(), newMockRepo(newTestUser()), newMockRefreshTokenRepo()).Dispatch(ctx, &RevokeTokenCommand{Token: "no-such-token"})
+		_, err := newMod(&mockJwtService{}, newMockCache(), newMockRepo(newTestUser()), newMockRefreshTokenRepo()).Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "no-such-token"})
 		if err != nil {
 			t.Fatalf("unknown token must not return an error per RFC 7009, got: %v", err)
 		}
@@ -305,6 +309,72 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		_, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "valid-refresh-token"})
 		if err != nil {
 			t.Fatalf("second revoke must be a no-op, got: %v", err)
+		}
+	})
+}
+
+func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
+	ctx := context.Background()
+
+	newMod := func(rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+		mod := usecase.NewRegistry()
+		mod.Register(RevokeTokenCommand{}, NewRevokeTokenUseCase(define.Dependencies{
+			UserRepo:         newMockRepo(newTestUser()),
+			JWTSvc:           &mockJwtService{parseErr: fmt.Errorf("not a jwt")},
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			ClientRegistry: newMockClientRegistry(
+				newTestClient(t, "public-client", entity.ClientAuthNone),
+				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
+			),
+		}))
+		return mod
+	}
+
+	seedRT := func() *entity.RefreshToken {
+		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "rt-1", Scope: entity.MustParseScope("openid")})
+	}
+
+	t.Run("no bearer and no client credentials — invalid_client", func(t *testing.T) {
+		_, err := newMod(newMockRefreshTokenRepo(seedRT())).Dispatch(ctx, &RevokeTokenCommand{Token: "rt-1"})
+		if err == nil {
+			t.Fatal("anonymous revoke must be rejected")
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.InvalidClient {
+			t.Fatalf("got %v, want InvalidClient", err)
+		}
+	})
+
+	t.Run("public client identified by client_id — token revoked without subject scoping", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo(seedRT())
+		_, err := newMod(rtRepo).Dispatch(ctx, &RevokeTokenCommand{ClientID: "public-client", Token: "rt-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rt, _ := rtRepo.FindByTokenHash(ctx, entity.Hash("rt-1")); rt == nil || rt.RevokedAt == nil {
+			t.Error("client-authenticated revoke must revoke the presented token")
+		}
+	})
+
+	t.Run("confidential client with correct secret — token revoked", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo(seedRT())
+		_, err := newMod(rtRepo).Dispatch(ctx, &RevokeTokenCommand{ClientID: "conf-client", ClientSecret: testClientSecret, Token: "rt-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rt, _ := rtRepo.FindByTokenHash(ctx, entity.Hash("rt-1")); rt == nil || rt.RevokedAt == nil {
+			t.Error("expected token revoked")
+		}
+	})
+
+	t.Run("confidential client with wrong secret — invalid_client, token untouched", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo(seedRT())
+		_, err := newMod(rtRepo).Dispatch(ctx, &RevokeTokenCommand{ClientID: "conf-client", ClientSecret: "wrong", Token: "rt-1"})
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.InvalidClient {
+			t.Fatalf("got %v, want InvalidClient", err)
+		}
+		if rt, _ := rtRepo.FindByTokenHash(ctx, entity.Hash("rt-1")); rt == nil || rt.RevokedAt != nil {
+			t.Error("token must stay active when client auth fails")
 		}
 	})
 }

@@ -241,9 +241,38 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(_ context.Context, userID entity
 
 // ── mock ClientRegistry ───────────────────────────────────────────────────────
 
+const testClientSecret = "test-secret-1"
+
 type mockClientRegistry struct {
 	clients map[entity.ClientID]*entity.Client
 	findErr error
+}
+
+func newTestClient(t *testing.T, id string, method entity.ClientAuthMethod) *entity.Client {
+	t.Helper()
+	secret := ""
+	if method != entity.ClientAuthNone {
+		secret = testClientSecret
+	}
+	c, err := entity.NewClient(entity.ClientArgs{
+		ID:            id,
+		AuthMethod:    method,
+		Secret:        secret,
+		RedirectURIs:  []string{"https://app.example.com/callback"},
+		AllowedGrants: []entity.GrantType{entity.GrantAuthorizationCode, entity.GrantRefreshToken},
+	})
+	if err != nil {
+		t.Fatalf("newTestClient: %v", err)
+	}
+	return c
+}
+
+func newMockClientRegistryOf(clients ...*entity.Client) *mockClientRegistry {
+	m := &mockClientRegistry{clients: make(map[entity.ClientID]*entity.Client)}
+	for _, c := range clients {
+		m.clients[c.ID] = c
+	}
+	return m
 }
 
 func newMockClientRegistry(t *testing.T, clientID, redirectURI string) *mockClientRegistry {

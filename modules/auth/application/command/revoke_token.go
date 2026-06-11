@@ -13,21 +13,28 @@ import (
 	coremetrics "sc/core/metrics"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
+	"sc/modules/auth/application/service"
 	"sc/modules/auth/domain/entity"
+	autherrors "sc/modules/auth/errors"
 	"sc/modules/auth/port"
 )
 
 type RevokeTokenCommand struct {
-	CallerID      string  `ctx:"user_id"`
-	Token         string  `form:"token" json:"token" validate:"required"`
-	TokenTypeHint *string `form:"token_type_hint" json:"token_type_hint" validate:"omitempty,oneof=access_token refresh_token"`
+	CallerID          string  `ctx:"user_id"`
+	ClientID          string  `form:"client_id" json:"client_id"`
+	ClientSecret      string  `form:"client_secret" json:"client_secret"`
+	BasicClientID     string  `ctx:"basic_client_id"`
+	BasicClientSecret string  `ctx:"basic_client_secret"`
+	Token             string  `form:"token" json:"token" validate:"required"`
+	TokenTypeHint     *string `form:"token_type_hint" json:"token_type_hint" validate:"omitempty,oneof=access_token refresh_token"`
 }
 
 type RevokeTokenUseCase struct {
-	jwtSvc             port.TokenParser
-	cache              corecache.Cache
-	refreshTokenRepo   port.RefreshTokenRepository
-	revocationsCounter coremetrics.Counter
+	jwtSvc              port.TokenParser
+	cache               corecache.Cache
+	refreshTokenRepo    port.RefreshTokenRepository
+	revocationsCounter  coremetrics.Counter
+	clientAuthenticator *service.ClientAuthenticator
 }
 
 func NewRevokeTokenUseCase(deps define.Dependencies) usecase.UseCase {
@@ -36,10 +43,11 @@ func NewRevokeTokenUseCase(deps define.Dependencies) usecase.UseCase {
 		rec = coremetrics.NewNoopRecorder()
 	}
 	return &RevokeTokenUseCase{
-		jwtSvc:             deps.JWTSvc,
-		cache:              deps.Cache,
-		refreshTokenRepo:   deps.RefreshTokenRepo,
-		revocationsCounter: rec.Counter(define.MetricTokenRevocations),
+		jwtSvc:              deps.JWTSvc,
+		cache:               deps.Cache,
+		refreshTokenRepo:    deps.RefreshTokenRepo,
+		revocationsCounter:  rec.Counter(define.MetricTokenRevocations),
+		clientAuthenticator: service.NewClientAuthenticator(deps.ClientRegistry),
 	}
 }
 
@@ -47,6 +55,25 @@ func NewRevokeTokenUseCase(deps define.Dependencies) usecase.UseCase {
 // if lookup under the hinted type misses, the server MUST extend its search to other types.
 func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*RevokeTokenCommand)
+
+	// RFC 7009 §2.1: callers without a bearer token authenticate as clients;
+	// public clients are identified by registered client_id (possession of
+	// the token itself is the capability — revocation can only destroy it).
+	// Bearer callers keep subject-scoped ownership checks below.
+	if c.CallerID == "" {
+		if c.ClientID == "" && c.BasicClientID == "" {
+			return nil, autherrors.NewErrInvalidClient()
+		}
+		if _, err := uc.clientAuthenticator.Authenticate(ctx, service.ClientCredentials{
+			ClientID:      c.ClientID,
+			FormSecret:    c.ClientSecret,
+			BasicClientID: c.BasicClientID,
+			BasicSecret:   c.BasicClientSecret,
+		}); err != nil {
+			return nil, autherrors.NewErrInvalidClient()
+		}
+	}
+
 	isAccessTokenHint := c.TokenTypeHint != nil && *c.TokenTypeHint == "access_token"
 
 	if isAccessTokenHint {
@@ -58,7 +85,7 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 
 		rt, lookupErr := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(c.Token))
 		if lookupErr == nil {
-			if rt.UserID != entity.UserID(c.CallerID) {
+			if c.CallerID != "" && rt.UserID != entity.UserID(c.CallerID) {
 				return nil, nil // RFC 7009 §2.2: wrong owner → treat as unknown
 			}
 			return nil, uc.revokeConfirmedRefreshToken(ctx, entity.Hash(c.Token))
@@ -74,7 +101,7 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 	rt, lookupErr := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(c.Token))
 	switch {
 	case lookupErr == nil:
-		if rt.UserID != entity.UserID(c.CallerID) {
+		if c.CallerID != "" && rt.UserID != entity.UserID(c.CallerID) {
 			return nil, nil // RFC 7009 §2.2: wrong owner → treat as unknown
 		}
 		return nil, uc.revokeConfirmedRefreshToken(ctx, entity.Hash(c.Token))
@@ -118,7 +145,12 @@ func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, t
 // Returns (false, nil) for unrecognised, expired, or wrong-owner tokens (RFC 7009 §2.2).
 func (uc *RevokeTokenUseCase) blacklistAccessToken(ctx context.Context, token, callerID string) (bool, error) {
 	claims, err := uc.jwtSvc.ParseJWT(token)
-	if err != nil || claims == nil || claims.ID == "" || claims.Subject != callerID {
+	if err != nil || claims == nil || claims.ID == "" {
+		return false, nil
+	}
+	// Bearer callers may only revoke their own tokens (RFC 7009 §2.2);
+	// client-authenticated callers (empty callerID) revoke any presented token.
+	if callerID != "" && claims.Subject != callerID {
 		return false, nil
 	}
 	if claims.IsExpired() {
@@ -128,6 +160,6 @@ func (uc *RevokeTokenUseCase) blacklistAccessToken(ctx context.Context, token, c
 		return false, err
 	}
 	uc.revocationsCounter.Add(1)
-	log.Info().Str("user_id", callerID).Msg("access token revoked")
+	log.Info().Str("user_id", claims.Subject).Msg("access token revoked")
 	return true, nil
 }

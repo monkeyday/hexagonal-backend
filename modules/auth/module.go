@@ -104,6 +104,7 @@ func httpStatusMapper(code coreerror.ErrCode) int {
 	case autherrors.InvalidToken,
 		autherrors.InvalidRefreshToken,
 		autherrors.InvalidEmailOrPassword,
+		autherrors.InvalidClient,
 		autherrors.PasswordResetTokenExpired:
 		return http.StatusUnauthorized
 	case autherrors.AuthCodeNotFound:

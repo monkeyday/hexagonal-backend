@@ -79,10 +79,13 @@ func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
 	oidc := r.Group("/oidc")
 	oidc.GET("/logout", middleware.ExtractAccessToken(), webHandler.Handle[command.LogoutCommand](ro.module))
 	oidc.POST("/logout", middleware.ExtractAccessToken(), webHandler.Handle[command.LogoutCommand](ro.module))
+	// revoke/introspect accept bearer OR client credentials (RFC 7009/7662);
+	// the use cases reject callers that present neither.
+	optionalAuth := middleware.AuthenticateOptional(ro.jwtSvc, ro.cache)
+	oidc.POST("/revoke", optionalAuth, middleware.ExtractClientCredentials(), webHandler.Handle[command.RevokeTokenCommand](ro.module))
+	oidc.POST("/introspect", optionalAuth, middleware.ExtractClientCredentials(), webHandler.Handle[query.IntrospectTokenQuery](ro.module))
 	oidc.Use(auth)
 	oidc.GET("/me", webHandler.Handle[query.GetProfileQuery](ro.module))
-	oidc.POST("/revoke", webHandler.Handle[command.RevokeTokenCommand](ro.module))
-	oidc.POST("/introspect", webHandler.Handle[query.IntrospectTokenQuery](ro.module))
 }
 
 func (ro *Router) registerV3Routes(r *gin.Engine) {

@@ -53,48 +53,61 @@ func ExtractAccessToken() gin.HandlerFunc {
 
 func Authenticate(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		res := responder.NewHTTPResponder(ctx)
-
-		accessToken, ok := extractBearerToken(ctx.GetHeader(authorizationHeader))
+		claims, token, ok := verifyBearer(ctx, svc, c)
 		if !ok {
 			ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
-			res.Response(nil, coreerror.New(coreerror.Unauthorized, 401, "token not found"), false)
-			ctx.Abort()
-			return
-		}
-
-		claims, err := svc.ParseJWT(accessToken)
-		if err != nil || claims == nil {
-			ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
+			res := responder.NewHTTPResponder(ctx)
 			res.Response(nil, coreerror.New(coreerror.Unauthorized, 401, "invalid token"), false)
 			ctx.Abort()
 			return
 		}
-
-		// A token without jti cannot be checked against the revocation
-		// blacklist, so it must be rejected, not waved through.
-		if claims.ID == "" {
-			ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
-			res.Response(nil, coreerror.New(coreerror.Unauthorized, 401, "invalid token"), false)
-			ctx.Abort()
-			return
-		}
-
-		if c != nil {
-			revoked, err := c.GetErr(ctx.Request.Context(), fmt.Sprintf(define.BlacklistCacheKey, claims.ID), nil)
-			if err != nil || revoked {
-				ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
-				res.Response(nil, coreerror.New(coreerror.Unauthorized, 401, "invalid token"), false)
-				ctx.Abort()
-				return
-			}
-		}
-
-		ctx.Set(TokenKey, accessToken)
-		ctx.Set(IssuerKey, claims.Issuer)
-		ctx.Set(UserIdKey, claims.Subject)
+		setBearerIdentity(ctx, claims, token)
 		ctx.Next()
 	}
+}
+
+// AuthenticateOptional attaches bearer identity when a valid token is
+// presented but never rejects the request. For endpoints that accept either
+// a bearer token or client credentials (revoke/introspect per RFC 7009/7662);
+// the use case enforces that at least one of them authenticated.
+func AuthenticateOptional(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if claims, token, ok := verifyBearer(ctx, svc, c); ok {
+			setBearerIdentity(ctx, claims, token)
+		}
+		ctx.Next()
+	}
+}
+
+// verifyBearer validates the Authorization bearer token: signature/claims via
+// the parser, a mandatory jti, and a fail-closed revocation-blacklist check.
+func verifyBearer(ctx *gin.Context, svc TokenParser, c corecache.ReadErrorCache) (*corejwt.Claims, string, bool) {
+	accessToken, ok := extractBearerToken(ctx.GetHeader(authorizationHeader))
+	if !ok {
+		return nil, "", false
+	}
+	claims, err := svc.ParseJWT(accessToken)
+	if err != nil || claims == nil {
+		return nil, "", false
+	}
+	// A token without jti cannot be checked against the revocation
+	// blacklist, so it must be rejected, not waved through.
+	if claims.ID == "" {
+		return nil, "", false
+	}
+	if c != nil {
+		revoked, err := c.GetErr(ctx.Request.Context(), fmt.Sprintf(define.BlacklistCacheKey, claims.ID), nil)
+		if err != nil || revoked {
+			return nil, "", false
+		}
+	}
+	return claims, accessToken, true
+}
+
+func setBearerIdentity(ctx *gin.Context, claims *corejwt.Claims, token string) {
+	ctx.Set(TokenKey, token)
+	ctx.Set(IssuerKey, claims.Issuer)
+	ctx.Set(UserIdKey, claims.Subject)
 }
 
 // extractBearerToken extracts the token from an Authorization header.
