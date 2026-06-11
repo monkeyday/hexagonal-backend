@@ -128,6 +128,22 @@ func setField(fv reflect.Value, val any) {
 	if !rv.IsValid() {
 		return
 	}
+	// Pointer fields (e.g. AccessToken *string `ctx:"access_token"`) receive
+	// a freshly allocated pointee; a bare string is not assignable to *string.
+	if fv.Kind() == reflect.Ptr && rv.Kind() != reflect.Ptr {
+		elem := fv.Type().Elem()
+		switch {
+		case rv.Type().AssignableTo(elem):
+			p := reflect.New(elem)
+			p.Elem().Set(rv)
+			fv.Set(p)
+		case rv.Type().ConvertibleTo(elem):
+			p := reflect.New(elem)
+			p.Elem().Set(rv.Convert(elem))
+			fv.Set(p)
+		}
+		return
+	}
 	switch {
 	case rv.Type().AssignableTo(fv.Type()):
 		fv.Set(rv)

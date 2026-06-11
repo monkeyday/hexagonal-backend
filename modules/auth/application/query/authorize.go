@@ -52,7 +52,11 @@ func (uc *GetAuthorizeUseCase) Execute(ctx context.Context, query any) (any, err
 		return nil, autherrors.NewErrInvalidRedirectURI()
 	}
 
-	// TODO(#1): require code_challenge when client.IsPublic() (PKCE mandatory for public clients).
+	// PKCE (S256) is mandatory for public clients; they have no other way
+	// to prove at exchange time that they initiated this request.
+	if client.IsPublic() && q.CodeChallenge == nil {
+		return nil, autherrors.NewErrInvalidAuthRequest()
+	}
 	session, err := entity.NewAuthorizeRequest(entity.AuthorizeRequestArgs{
 		ClientID:            q.ClientID,
 		RedirectURI:         q.RedirectURI,

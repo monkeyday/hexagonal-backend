@@ -24,7 +24,22 @@ const (
 	TokenKey              = "access_token"
 	IssuerKey             = "issuer"
 	UserIdKey             = "user_id"
+	BasicClientIDKey      = "basic_client_id"
+	BasicClientSecretKey  = "basic_client_secret"
 )
+
+// ExtractClientCredentials exposes HTTP Basic credentials (client_secret_basic)
+// to commands via ctx-bound fields. Verification happens in the application
+// layer; this only adapts the transport.
+func ExtractClientCredentials() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if id, secret, ok := ctx.Request.BasicAuth(); ok {
+			ctx.Set(BasicClientIDKey, id)
+			ctx.Set(BasicClientSecretKey, secret)
+		}
+		ctx.Next()
+	}
+}
 
 // ExtractAccessToken Use this on routes where a token is useful but not required (e.g., logout).
 func ExtractAccessToken() gin.HandlerFunc {

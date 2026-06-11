@@ -36,11 +36,25 @@ func TestExchangeCodeUseCase(t *testing.T) {
 		ExpiresAt:   time.Now().Add(-time.Minute),
 	}
 
+	newPublicPKCECode := func(userID entity.UserID) *entity.AuthCode {
+		return &entity.AuthCode{
+			Code:                "pub-pkce-code",
+			UserID:              userID,
+			ClientID:            new(entity.ClientID("public-client")),
+			RedirectURI:         "https://app.example.com/callback",
+			Scope:               entity.MustParseScope("openid"),
+			CodeChallenge:       new("Ds3NpaREu9I2EYq6l0l3ZkFyv_Gt5O4EpGD6cZlY0Kg"), // S256 of "verifier-123"
+			CodeChallengeMethod: new("S256"),
+			ExpiresAt:           time.Now().Add(entity.AuthCodeTTL),
+		}
+	}
+
 	base := &ExchangeCodeCommand{
-		Code:        "valid-code",
-		ClientID:    "client-123",
-		RedirectURI: "https://app.example.com/callback",
-		ExpireSecs:  new(3600),
+		Code:         "valid-code",
+		ClientID:     "client-123",
+		ClientSecret: testClientSecret,
+		RedirectURI:  "https://app.example.com/callback",
+		ExpireSecs:   new(3600),
 	}
 
 	tests := []struct {
@@ -85,26 +99,33 @@ func TestExchangeCodeUseCase(t *testing.T) {
 		},
 		{
 			name:        "code not found returns error",
-			cmd:         &ExchangeCodeCommand{Code: "unknown-code", ClientID: "client-123", RedirectURI: "https://app.example.com/callback"},
+			cmd:         &ExchangeCodeCommand{Code: "unknown-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback"},
 			jwtSvc:      &mockJwtService{},
 			wantErrCode: autherrors.AuthCodeNotFound,
 		},
 		{
 			name:        "expired code returns error",
-			cmd:         &ExchangeCodeCommand{Code: "expired-code", ClientID: "client-123", RedirectURI: "https://app.example.com/callback"},
+			cmd:         &ExchangeCodeCommand{Code: "expired-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback"},
 			jwtSvc:      &mockJwtService{},
 			extraCodes:  []*entity.AuthCode{expiredCode},
 			wantErrCode: autherrors.AuthCodeNotFound,
 		},
 		{
-			name:        "client_id mismatch returns error",
+			name:        "unknown client_id — invalid_client",
 			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "wrong-client", RedirectURI: "https://app.example.com/callback"},
 			jwtSvc:      &mockJwtService{},
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name:        "registered client_id not matching the code — invalid_grant",
+			cmd:         &ExchangeCodeCommand{Code: "pub-pkce-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback", CodeVerifier: "verifier-123"},
+			jwtSvc:      &mockJwtService{},
+			extraCodes:  []*entity.AuthCode{newPublicPKCECode(user.ID)},
 			wantErrCode: autherrors.InvalidArguments,
 		},
 		{
 			name:        "redirect_uri mismatch returns error",
-			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "client-123", RedirectURI: "https://evil.example.com/callback"},
+			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://evil.example.com/callback"},
 			jwtSvc:      &mockJwtService{},
 			wantErrCode: autherrors.InvalidArguments,
 		},
@@ -145,6 +166,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			cmd: &ExchangeCodeCommand{
 				Code:         "pkce-code",
 				ClientID:     "client-123",
+				ClientSecret: testClientSecret,
 				RedirectURI:  "https://app.example.com/callback",
 				CodeVerifier: "verifier-123",
 			},
@@ -172,6 +194,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			cmd: &ExchangeCodeCommand{
 				Code:         "pkce-plain-code",
 				ClientID:     "client-123",
+				ClientSecret: testClientSecret,
 				RedirectURI:  "https://app.example.com/callback",
 				CodeVerifier: "verifier-plain-123",
 			},
@@ -193,9 +216,10 @@ func TestExchangeCodeUseCase(t *testing.T) {
 		{
 			name: "PKCE challenge present but verifier omitted",
 			cmd: &ExchangeCodeCommand{
-				Code:        "pkce-no-verifier",
-				ClientID:    "client-123",
-				RedirectURI: "https://app.example.com/callback",
+				Code:         "pkce-no-verifier",
+				ClientID:     "client-123",
+				ClientSecret: testClientSecret,
+				RedirectURI:  "https://app.example.com/callback",
 			},
 			jwtSvc: &mockJwtService{},
 			extraCodes: []*entity.AuthCode{
@@ -217,6 +241,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			cmd: &ExchangeCodeCommand{
 				Code:         "pkce-code-fail",
 				ClientID:     "client-123",
+				ClientSecret: testClientSecret,
 				RedirectURI:  "https://app.example.com/callback",
 				CodeVerifier: "wrong-verifier",
 			},
@@ -234,6 +259,71 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				},
 			},
 			wantErrCode: autherrors.InvalidArguments,
+		},
+		{
+			name:        "confidential client with wrong secret — invalid_client",
+			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "client-123", ClientSecret: "wrong-secret", RedirectURI: "https://app.example.com/callback"},
+			jwtSvc:      &mockJwtService{},
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name:        "confidential client without secret — invalid_client",
+			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "client-123", RedirectURI: "https://app.example.com/callback"},
+			jwtSvc:      &mockJwtService{},
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name: "confidential client via Basic auth — tokens issued",
+			cmd: &ExchangeCodeCommand{
+				Code:              "valid-code",
+				ClientID:          "client-123",
+				BasicClientID:     "client-123",
+				BasicClientSecret: testClientSecret,
+				RedirectURI:       "https://app.example.com/callback",
+			},
+			jwtSvc:          &mockJwtService{accessToken: "basic-access", refreshToken: "basic-refresh"},
+			wantRTPersisted: true,
+		},
+		{
+			name:        "public client presenting a secret — invalid_client",
+			cmd:         &ExchangeCodeCommand{Code: "pub-pkce-code", ClientID: "public-client", ClientSecret: "anything", RedirectURI: "https://app.example.com/callback", CodeVerifier: "verifier-123"},
+			jwtSvc:      &mockJwtService{},
+			extraCodes:  []*entity.AuthCode{newPublicPKCECode(user.ID)},
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name: "public client with valid PKCE verifier — tokens issued",
+			cmd: &ExchangeCodeCommand{
+				Code:         "pub-pkce-code",
+				ClientID:     "public-client",
+				RedirectURI:  "https://app.example.com/callback",
+				CodeVerifier: "verifier-123",
+			},
+			jwtSvc:          &mockJwtService{accessToken: "pub-access", refreshToken: "pub-refresh"},
+			extraCodes:      []*entity.AuthCode{newPublicPKCECode(user.ID)},
+			wantRTPersisted: true,
+		},
+		{
+			name:   "public client, code issued without challenge — invalid_grant",
+			cmd:    &ExchangeCodeCommand{Code: "pub-no-pkce", ClientID: "public-client", RedirectURI: "https://app.example.com/callback"},
+			jwtSvc: &mockJwtService{},
+			extraCodes: []*entity.AuthCode{
+				{
+					Code:        "pub-no-pkce",
+					UserID:      user.ID,
+					ClientID:    new(entity.ClientID("public-client")),
+					RedirectURI: "https://app.example.com/callback",
+					Scope:       entity.MustParseScope("openid"),
+					ExpiresAt:   time.Now().Add(entity.AuthCodeTTL),
+				},
+			},
+			wantErrCode: autherrors.InvalidArguments,
+		},
+		{
+			name:        "client not allowed to use authorization_code grant — invalid_client",
+			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "password-only-client", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback"},
+			jwtSvc:      &mockJwtService{},
+			wantErrCode: autherrors.InvalidClient,
 		},
 	}
 
@@ -256,6 +346,11 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				UserRepo:         userRepo,
 				Cache:            mc,
 				RefreshTokenRepo: rtRepo,
+				ClientRegistry: newMockClientRegistry(
+					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
+					newTestClient(t, "public-client", entity.ClientAuthNone),
+					newTestClient(t, "password-only-client", entity.ClientAuthSecretPost, entity.GrantPassword),
+				),
 			})
 
 			result, err := uc.Execute(context.Background(), tc.cmd)
@@ -318,9 +413,10 @@ func TestExchangeCodeOnlyOnce(t *testing.T) {
 		UserRepo:         newMockRepo(user),
 		Cache:            mc,
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	})
 
-	cmd := &ExchangeCodeCommand{Code: "one-time-code", ClientID: "client-123", RedirectURI: "https://app.example.com/callback"}
+	cmd := &ExchangeCodeCommand{Code: "one-time-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback"}
 
 	if _, err := uc.Execute(context.Background(), cmd); err != nil {
 		t.Fatalf("first exchange failed: %v", err)

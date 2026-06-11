@@ -16,11 +16,14 @@ import (
 )
 
 type ExchangeCodeCommand struct {
-	Code         string `form:"code"          validate:"required"`
-	ClientID     string `form:"client_id"     validate:"required"`
-	RedirectURI  string `form:"redirect_uri"  validate:"required,redirect_uri"`
-	ExpireSecs   *int   `form:"expire_secs"   validate:"omitempty,gt=0"`
-	CodeVerifier string `form:"code_verifier"`
+	Code              string `form:"code"          validate:"required"`
+	ClientID          string `form:"client_id"     validate:"required"`
+	ClientSecret      string `form:"client_secret"`
+	BasicClientID     string `ctx:"basic_client_id"`
+	BasicClientSecret string `ctx:"basic_client_secret"`
+	RedirectURI       string `form:"redirect_uri"  validate:"required,redirect_uri"`
+	ExpireSecs        *int   `form:"expire_secs"   validate:"omitempty,gt=0"`
+	CodeVerifier      string `form:"code_verifier"`
 	// TODO: add DeviceID field and pass it to NewRefreshToken once client support is established
 }
 
@@ -29,6 +32,7 @@ type ExchangeCodeUseCase struct {
 	refreshTokenRepo     port.RefreshTokenRepository
 	cache                corecache.Cache
 	tokenIssuanceService *service.TokenIssuanceService
+	clientAuthenticator  *service.ClientAuthenticator
 }
 
 func NewExchangeCodeUseCase(deps define.Dependencies) usecase.UseCase {
@@ -37,18 +41,36 @@ func NewExchangeCodeUseCase(deps define.Dependencies) usecase.UseCase {
 		refreshTokenRepo:     deps.RefreshTokenRepo,
 		cache:                deps.Cache,
 		tokenIssuanceService: service.NewTokenIssuanceService(deps.JWTSvc),
+		clientAuthenticator:  service.NewClientAuthenticator(deps.ClientRegistry),
 	}
 }
 
 func (uc *ExchangeCodeUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*ExchangeCodeCommand)
 
+	client, err := uc.clientAuthenticator.Authenticate(ctx, service.ClientCredentials{
+		ClientID:      c.ClientID,
+		FormSecret:    c.ClientSecret,
+		BasicClientID: c.BasicClientID,
+		BasicSecret:   c.BasicClientSecret,
+	})
+	if err != nil {
+		return nil, autherrors.NewErrInvalidClient()
+	}
+	if !client.AllowsGrant(entity.GrantAuthorizationCode) {
+		return nil, autherrors.NewErrInvalidClient()
+	}
+
 	authCode, err := uc.consumeAuthCode(ctx, c.Code)
 	if err != nil || authCode == nil {
 		return nil, autherrors.NewErrAuthCodeNotFound()
 	}
 
-	// TODO: once a client registry exists, verify client is registered and allowed to use
+	// PKCE is mandatory for public clients: a code issued without a
+	// challenge must not be exchangeable without client authentication.
+	if client.IsPublic() && authCode.CodeChallenge == nil {
+		return nil, autherrors.NewErrInvalidGrant()
+	}
 	if !authCode.IsValid(c.ClientID, c.RedirectURI, c.CodeVerifier) {
 		return nil, autherrors.NewErrInvalidGrant()
 	}

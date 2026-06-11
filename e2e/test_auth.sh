@@ -195,8 +195,11 @@ info "refresh_token: [${#REFRESH_TOKEN} chars]"
 section "OIDC code flow — GET /authorize"
 STATE=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '=\n' | tr '+/' '-_')
 NONCE=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '=\n' | tr '+/' '-_')
+# PKCE (mandatory for public clients): S256 challenge over a random verifier
+CODE_VERIFIER=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '=\n' | tr '+/' '-_')
+CODE_CHALLENGE=$(printf '%s' "$CODE_VERIFIER" | openssl dgst -sha256 -binary | base64 | tr -d '=\n' | tr '+/' '-_')
 AUTHORIZE_RESP=$(curl -si -c "$COOKIE_JAR" --max-redirs 0 --max-time 10 \
-  "$BASE_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&scope=openid+email+profile&state=$STATE&nonce=$NONCE" 2>/dev/null)
+  "$BASE_URL/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&scope=openid+email+profile&state=$STATE&nonce=$NONCE&code_challenge=$CODE_CHALLENGE&code_challenge_method=S256" 2>/dev/null)
 AUTH_STATUS=$(echo "$AUTHORIZE_RESP" | head -1 | awk '{print $2}')
 check_status "GET /authorize → 302" "302" "$AUTH_STATUS"
 
@@ -247,7 +250,7 @@ section "OIDC code flow — exchange code"
 if [ -n "$CODE" ]; then
   split_resp "$(do_req "$BASE_URL/token" -X POST \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=authorization_code&code=$CODE&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI")"
+    -d "grant_type=authorization_code&code=$CODE&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&code_verifier=$CODE_VERIFIER")"
   check_status "POST /token (exchange code)" "200" "$STATUS"
   check_json   "exchange code response" "$BODY"
   check_field  "exchange code" "$BODY" "access_token"

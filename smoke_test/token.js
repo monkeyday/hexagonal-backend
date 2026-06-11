@@ -72,7 +72,7 @@ export default function () {
   // ── grant_type=authorization_code ────────────────────────────────────────────
   group('authorization_code grant', () => {
     // Establish OIDC session, then POST /sign-in with the scraped csrf_token.
-    const { csrfToken } = startAuthFlow(null, 'smoke-nonce');
+    const { csrfToken, codeVerifier } = startAuthFlow(null, 'smoke-nonce');
     if (!csrfToken) {
       console.warn('authorization_code grant skipped: startAuthFlow failed');
       return;
@@ -100,10 +100,11 @@ export default function () {
     const res = http.post(
       `${BASE_URL}/token`,
       {
-        grant_type:   'authorization_code',
-        code:         code,
-        client_id:    'smoke-client',
-        redirect_uri: REDIRECT_URI,
+        grant_type:    'authorization_code',
+        code:          code,
+        client_id:     'smoke-client',
+        redirect_uri:  REDIRECT_URI,
+        code_verifier: codeVerifier,
       },
       { headers: FORM_HEADERS },
     );

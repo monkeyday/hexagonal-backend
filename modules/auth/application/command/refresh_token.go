@@ -15,10 +15,13 @@ import (
 )
 
 type RefreshTokenCommand struct {
-	GrantType    string `form:"grant_type" json:"grant_type" validate:"required"`
-	ClientID     string `form:"client_id" json:"client_id" validate:"required"`
-	RefreshToken string `form:"refresh_token" json:"refresh_token" cookie:"refresh_token" validate:"required"`
-	ExpireSecs   *int   `form:"expire_secs" json:"expire_secs" validate:"omitempty,gt=0"`
+	GrantType         string `form:"grant_type" json:"grant_type" validate:"required"`
+	ClientID          string `form:"client_id" json:"client_id" validate:"required"`
+	ClientSecret      string `form:"client_secret" json:"client_secret"`
+	BasicClientID     string `ctx:"basic_client_id"`
+	BasicClientSecret string `ctx:"basic_client_secret"`
+	RefreshToken      string `form:"refresh_token" json:"refresh_token" cookie:"refresh_token" validate:"required"`
+	ExpireSecs        *int   `form:"expire_secs" json:"expire_secs" validate:"omitempty,gt=0"`
 }
 
 type RefreshTokenUseCase struct {
@@ -26,6 +29,7 @@ type RefreshTokenUseCase struct {
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
 	tokenIssuanceService *domainService.TokenIssuanceService
+	clientAuthenticator  *domainService.ClientAuthenticator
 }
 
 func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
@@ -34,14 +38,26 @@ func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
 		tokenIssuanceService: domainService.NewTokenIssuanceService(deps.JWTSvc),
+		clientAuthenticator:  domainService.NewClientAuthenticator(deps.ClientRegistry),
 	}
 }
 
 func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*RefreshTokenCommand)
 
-	// TODO: once a client registry exists, verify client_id is registered and allowed to use
-	// the refresh_token grant; validate client_secret for confidential clients here.
+	client, err := uc.clientAuthenticator.Authenticate(ctx, domainService.ClientCredentials{
+		ClientID:      c.ClientID,
+		FormSecret:    c.ClientSecret,
+		BasicClientID: c.BasicClientID,
+		BasicSecret:   c.BasicClientSecret,
+	})
+	if err != nil {
+		return nil, autherrors.NewErrInvalidClient()
+	}
+	if !client.AllowsGrant(entity.GrantRefreshToken) {
+		return nil, autherrors.NewErrInvalidClient()
+	}
+
 	rt, err := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(c.RefreshToken))
 	if err != nil || rt == nil || !rt.IsValid() {
 		return nil, autherrors.NewErrInvalidRefreshToken()

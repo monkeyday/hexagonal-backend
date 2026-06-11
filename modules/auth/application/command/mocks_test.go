@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"testing"
 	"time"
 
 	coreerror "sc/core/error"
@@ -319,6 +320,48 @@ func (m *mockRefreshTokenRepo) findAllForUser(userID string) ([]*entity.RefreshT
 		}
 	}
 	return result, nil
+}
+
+// ── mock ClientRegistry ───────────────────────────────────────────────────────
+
+const testClientSecret = "test-secret-1"
+
+type mockClientRegistry struct {
+	clients map[entity.ClientID]*entity.Client
+}
+
+func newMockClientRegistry(clients ...*entity.Client) *mockClientRegistry {
+	m := &mockClientRegistry{clients: make(map[entity.ClientID]*entity.Client)}
+	for _, c := range clients {
+		m.clients[c.ID] = c
+	}
+	return m
+}
+
+func (m *mockClientRegistry) FindByID(_ context.Context, _ entity.TenantID, id entity.ClientID) (*entity.Client, error) {
+	return m.clients[id], nil
+}
+
+func newTestClient(t *testing.T, id string, method entity.ClientAuthMethod, grants ...entity.GrantType) *entity.Client {
+	t.Helper()
+	secret := ""
+	if method != entity.ClientAuthNone {
+		secret = testClientSecret
+	}
+	if len(grants) == 0 {
+		grants = []entity.GrantType{entity.GrantAuthorizationCode, entity.GrantRefreshToken}
+	}
+	c, err := entity.NewClient(entity.ClientArgs{
+		ID:            id,
+		AuthMethod:    method,
+		Secret:        secret,
+		RedirectURIs:  []string{"https://app.example.com/callback"},
+		AllowedGrants: grants,
+	})
+	if err != nil {
+		t.Fatalf("newTestClient: %v", err)
+	}
+	return c
 }
 
 // ── mock UnitOfWork ───────────────────────────────────────────────────────────

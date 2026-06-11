@@ -26,6 +26,7 @@ const (
 	UnsupportedScope           coreerror.ErrCode = 10020
 	InvalidAuthRequest         coreerror.ErrCode = 10021
 	ResetPasswordFailed        coreerror.ErrCode = 10022
+	InvalidClient              coreerror.ErrCode = 10023
 )
 
 func NewErrInvalidEmailOrPassword() *coreerror.ErrorStruct {
@@ -102,6 +103,10 @@ func NewErrInvalidAuthRequest() *coreerror.ErrorStruct {
 
 func NewErrInvalidGrant() *coreerror.ErrorStruct {
 	return coreerror.NewMsg(InvalidArguments, "invalid_grant")
+}
+
+func NewErrInvalidClient() *coreerror.ErrorStruct {
+	return coreerror.NewMsg(InvalidClient, "invalid_client")
 }
 
 func NewErrGenRefreshTokenFailed(err error) *coreerror.ErrorStruct {

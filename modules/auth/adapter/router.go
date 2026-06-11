@@ -46,12 +46,14 @@ func (ro *Router) registerPublicRoutes(r *gin.Engine) {
 	// not exposed to public or browser-based consumers.
 	r.POST("/token",
 		middleware.GrantType([]string{grantTypeRefreshToken, grantTypeAuthCode, grantTypePassword}),
+		middleware.ExtractClientCredentials(),
 		webHandler.HandleIf[command.RefreshTokenCommand](ro.module, grantTypeIs(grantTypeRefreshToken)),
 		webHandler.HandleIf[command.ExchangeCodeCommand](ro.module, grantTypeIs(grantTypeAuthCode)),
 		webHandler.HandleIf[query.GetTokenQuery](ro.module, grantTypeIs(grantTypePassword)),
 	)
 	kc.POST("/token",
 		middleware.GrantType([]string{grantTypeRefreshToken, grantTypeAuthCode, grantTypePassword}),
+		middleware.ExtractClientCredentials(),
 		webHandler.HandleIf[command.RefreshTokenCommand](ro.module, grantTypeIs(grantTypeRefreshToken)),
 		webHandler.HandleIf[command.ExchangeCodeCommand](ro.module, grantTypeIs(grantTypeAuthCode)),
 		webHandler.HandleIf[query.GetTokenQuery](ro.module, grantTypeIs(grantTypePassword)),

@@ -5,7 +5,7 @@
  */
 import http, { expectedStatuses } from 'k6/http';
 import { check } from 'k6';
-import { smokeOptions, BASE_URL } from './helpers.js';
+import { smokeOptions, BASE_URL, pkceParams } from './helpers.js';
 
 export const options = smokeOptions;
 
@@ -14,7 +14,7 @@ export default function () {
   const valid = http.get(
     `${BASE_URL}/authorize?response_type=code&client_id=smoke-client` +
     `&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback` +
-    `&scope=openid%20email&state=smoke-state&nonce=smoke-nonce`,
+    `&scope=openid%20email&state=smoke-state&nonce=smoke-nonce` + pkceParams(),
   );
   check(valid, {
     'valid request: status 200': (r) => r.status === 200,

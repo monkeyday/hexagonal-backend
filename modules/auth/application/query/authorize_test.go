@@ -37,12 +37,14 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 		{
 			name: "valid request — stores session in cache and returns session_id",
 			cmd: &GetAuthorizeQuery{
-				ResponseType: "code",
-				ClientID:     "client-123",
-				RedirectURI:  "https://app.example.com/callback",
-				Scope:        "openid email",
-				State:        new("state-xyz"),
-				Nonce:        new("nonce-abc"),
+				ResponseType:        "code",
+				ClientID:            "client-123",
+				RedirectURI:         "https://app.example.com/callback",
+				Scope:               "openid email",
+				State:               new("state-xyz"),
+				Nonce:               new("nonce-abc"),
+				CodeChallenge:       new("Ds3NpaREu9I2EYq6l0l3ZkFyv_Gt5O4EpGD6cZlY0Kg"),
+				CodeChallengeMethod: new("S256"),
 			},
 			checkState: func(t *testing.T, mc *mockCache, res *define.GetAuthorizeResponse) {
 				if res.SessionID == "" {
@@ -89,10 +91,12 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 		{
 			name: "no state — session stored without state field",
 			cmd: &GetAuthorizeQuery{
-				ResponseType: "code",
-				ClientID:     "client-123",
-				RedirectURI:  "https://app.example.com/callback",
-				Scope:        "openid",
+				ResponseType:        "code",
+				ClientID:            "client-123",
+				RedirectURI:         "https://app.example.com/callback",
+				Scope:               "openid",
+				CodeChallenge:       new("Ds3NpaREu9I2EYq6l0l3ZkFyv_Gt5O4EpGD6cZlY0Kg"),
+				CodeChallengeMethod: new("S256"),
 			},
 			checkState: func(t *testing.T, mc *mockCache, res *define.GetAuthorizeResponse) {
 				raw, ok := mc.items[fmt.Sprintf(define.AuthorizeRequestCacheKey, res.SessionID)]
@@ -173,6 +177,16 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 			},
 		},
 		{
+			name: "public client without code_challenge — rejected (PKCE mandatory)",
+			cmd: &GetAuthorizeQuery{
+				ResponseType: "code",
+				ClientID:     "client-123",
+				RedirectURI:  "https://app.example.com/callback",
+				Scope:        "openid",
+			},
+			wantErrCode: autherrors.InvalidAuthRequest,
+		},
+		{
 			name: "PKCE with plain method is rejected",
 			cmd: &GetAuthorizeQuery{
 				ResponseType:        "code",
@@ -238,10 +252,12 @@ func TestGetAuthorizeUseCase(t *testing.T) {
 			ClientRegistry: registry,
 		}))
 		_, err := mod.Dispatch(ctx, &GetAuthorizeQuery{
-			ResponseType: "code",
-			ClientID:     "client-123",
-			RedirectURI:  "https://app.example.com/callback",
-			Scope:        "openid",
+			ResponseType:        "code",
+			ClientID:            "client-123",
+			RedirectURI:         "https://app.example.com/callback",
+			Scope:               "openid",
+			CodeChallenge:       new("Ds3NpaREu9I2EYq6l0l3ZkFyv_Gt5O4EpGD6cZlY0Kg"),
+			CodeChallengeMethod: new("S256"),
 		})
 		if err == nil {
 			t.Fatal("expected error on cache failure, got nil")

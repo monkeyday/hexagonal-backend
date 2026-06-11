@@ -15,7 +15,7 @@
  */
 import http, { expectedStatuses } from 'k6/http';
 import { check, group } from 'k6';
-import { smokeOptions, BASE_URL, EMAIL, PASSWORD, REDIRECT_URI, ensureUser, getTokens, startAuthFlow } from './helpers.js';
+import { smokeOptions, BASE_URL, EMAIL, PASSWORD, REDIRECT_URI, ensureUser, getTokens, startAuthFlow, pkceParams } from './helpers.js';
 
 export const options = smokeOptions;
 
@@ -33,7 +33,7 @@ export default function (tokens) {
   group('GET /protocol/openid-connect/auth', () => {
     const res = http.get(
       `${BASE_URL}/protocol/openid-connect/auth?response_type=code&client_id=smoke-client` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=openid%20email`,
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=openid%20email` + pkceParams(),
     );
     check(res, {
       'status 200':      (r) => r.status === 200,
@@ -60,7 +60,7 @@ export default function (tokens) {
 
   // ── POST /protocol/openid-connect/token — authorization_code grant ───────────
   group('POST /protocol/openid-connect/token — authorization_code', () => {
-    const { csrfToken } = startAuthFlow(null, 'smoke-nonce');
+    const { csrfToken, codeVerifier } = startAuthFlow(null, 'smoke-nonce');
     if (!csrfToken) {
       console.warn('authorization_code alias skipped: startAuthFlow failed');
       return;
@@ -80,10 +80,11 @@ export default function (tokens) {
     const res = http.post(
       `${BASE_URL}/protocol/openid-connect/token`,
       {
-        grant_type:   'authorization_code',
-        code:         decodeURIComponent(match[1]),
-        client_id:    'smoke-client',
-        redirect_uri: REDIRECT_URI,
+        grant_type:    'authorization_code',
+        code:          decodeURIComponent(match[1]),
+        client_id:     'smoke-client',
+        redirect_uri:  REDIRECT_URI,
+        code_verifier: codeVerifier,
       },
       { headers: FORM_HEADERS },
     );

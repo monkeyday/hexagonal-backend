@@ -30,6 +30,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
 		type result struct {
@@ -81,6 +82,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
 		resp, err := mod.Dispatch(ctx, &RefreshTokenCommand{
@@ -113,6 +115,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
 		_, err := mod.Dispatch(ctx, &RefreshTokenCommand{
@@ -337,6 +340,57 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			}(),
 			wantErrCode: autherrors.InvalidRefreshToken,
 		},
+		{
+			name: "unknown client — invalid_client",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "ghost-client",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:         &mockJwtService{},
+			repo:        newMockRepo(newTestUser()),
+			rtRepo:      newMockRefreshTokenRepo(newValidRT()),
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name: "confidential client with wrong secret — invalid_client",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "client-123",
+				ClientSecret: "wrong-secret",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:         &mockJwtService{},
+			repo:        newMockRepo(newTestUser()),
+			rtRepo:      newMockRefreshTokenRepo(newValidRT()),
+			wantErrCode: autherrors.InvalidClient,
+		},
+		{
+			name: "confidential client with correct secret — rotated",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "client-123",
+				ClientSecret: testClientSecret,
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:       &mockJwtService{accessToken: "conf-access", refreshToken: "conf-refresh"},
+			repo:      newMockRepo(newTestUser()),
+			rtRepo:    newMockRefreshTokenRepo(newValidRT()),
+			wantToken: "conf-access",
+		},
+		{
+			name: "client not allowed to use refresh_token grant — invalid_client",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "password-only-client",
+				ClientSecret: testClientSecret,
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:         &mockJwtService{},
+			repo:        newMockRepo(newTestUser()),
+			rtRepo:      newMockRefreshTokenRepo(newValidRT()),
+			wantErrCode: autherrors.InvalidClient,
+		},
 	}
 
 	for _, tc := range tests {
@@ -347,6 +401,11 @@ func TestRefreshTokenUseCase(t *testing.T) {
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
+				ClientRegistry: newMockClientRegistry(
+					newTestClient(t, "APP_ID", entity.ClientAuthNone),
+					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
+					newTestClient(t, "password-only-client", entity.ClientAuthSecretPost, entity.GrantPassword),
+				),
 			}))
 			result, err := mod.Dispatch(ctx, tc.cmd)
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -56,8 +57,9 @@ type sessionData struct {
 }
 
 type pendingAuth struct {
-	State string
-	Nonce string
+	State    string
+	Nonce    string
+	Verifier string
 }
 
 var (
@@ -360,7 +362,12 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to generate nonce", http.StatusInternalServerError)
 		return
 	}
-	pending = pendingAuth{State: state, Nonce: nonce}
+	verifier, err := generateRandom(32)
+	if err != nil {
+		http.Error(w, "failed to generate code verifier", http.StatusInternalServerError)
+		return
+	}
+	pending = pendingAuth{State: state, Nonce: nonce, Verifier: verifier}
 
 	setCurrentLastResponse(r, "")
 	params := url.Values{}
@@ -370,6 +377,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	params.Add("scope", Scope)
 	params.Add("state", state)
 	params.Add("nonce", nonce)
+	params.Add("code_challenge", s256Challenge(verifier))
+	params.Add("code_challenge_method", "S256")
 
 	authURL := fmt.Sprintf("%s?%s", AuthorizeEndpoint, params.Encode())
 	fmt.Printf("[+] Redirecting to: %s\n", authURL)
@@ -396,6 +405,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	data.Set("code", code)
 	data.Set("client_id", ClientID)
 	data.Set("redirect_uri", RedirectURI)
+	data.Set("code_verifier", pending.Verifier)
 	data.Set("expire_secs", strconv.Itoa(120))
 
 	tok, err := postToken(data)
@@ -710,6 +720,11 @@ func generateRandom(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func s256Challenge(verifier string) string {
+	h := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
 func extractNonce(idToken string) (string, error) {

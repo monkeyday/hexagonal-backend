@@ -347,6 +347,19 @@ func TestSetField_Convertible(t *testing.T) {
 	}
 }
 
+func TestSetField_PointerTarget(t *testing.T) {
+	// Regression: ctx values are plain strings, but fields like
+	// AccessToken *string `ctx:"access_token"` are pointers. setField must
+	// allocate the pointee instead of silently dropping the value.
+	type S struct{ Token *string }
+	s := &S{}
+	fv := reflect.ValueOf(s).Elem().Field(0)
+	setField(fv, "bearer-value")
+	if s.Token == nil || *s.Token != "bearer-value" {
+		t.Errorf("got %v, want pointer to %q", s.Token, "bearer-value")
+	}
+}
+
 func TestSetField_InvalidValue(t *testing.T) {
 	type S struct{ Name string }
 	s := &S{Name: "original"}
