@@ -375,7 +375,8 @@ If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is
 
 | Variable | Example | Description |
 |---|---|---|
-| `OAUTH_CLIENT_ID` | `my_client` | ID of the single registered OAuth client; defaults to `client-123` with localhost callbacks if unset |
+| `OAUTH_CLIENT_ID` | `my_client` | ID of the single registered OAuth client. **Required** — startup panics when unset, unless `DEV_SEED=true` |
+| `DEV_SEED` | `true` | Opt-in for local development only: registers the built-in `client-123` dev client when `OAUTH_CLIENT_ID` is unset |
 | `OAUTH_CLIENT_REDIRECT_URIS` | `https://a.example.com/cb,https://a.example.com/cb2` | Comma-separated allowed redirect URIs for the client |
 | `OAUTH_CLIENT_AUTH_METHOD` | `none` | `none` (public), `client_secret_basic`, or `client_secret_post`; default `none` |
 | `OAUTH_CLIENT_SECRET` | `s3cret` | Client secret; required when auth method is not `none` (hashed at startup) |

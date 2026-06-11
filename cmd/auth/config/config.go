@@ -167,7 +167,12 @@ var (
 func parseClientConfig() ClientConfig {
 	id := os.Getenv("OAUTH_CLIENT_ID")
 	if id == "" {
-		// Dev fallback mirroring the pre-registry allowlist default.
+		// Fail closed: never serve /authorize for a fictitious default client.
+		// Local development opts in to the seed client explicitly.
+		if os.Getenv("DEV_SEED") != "true" {
+			panic("no OAuth client configured: set OAUTH_CLIENT_ID (and related OAUTH_CLIENT_* vars), or DEV_SEED=true for local development")
+		}
+		log.Warn().Str("client_id", defaultClientID).Msg("DEV_SEED=true: using built-in development OAuth client; never enable in production")
 		return ClientConfig{
 			ID:            defaultClientID,
 			AuthMethod:    defaultClientAuthMethod,

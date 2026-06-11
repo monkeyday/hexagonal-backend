@@ -26,7 +26,7 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		}
 		userRepo = r
 	} else {
-		r, err := adapterout.NewUserRepository(deps.FileStore, buildSeedUsers())
+		r, err := adapterout.NewUserRepository(deps.FileStore, nil)
 		if err != nil {
 			panic(fmt.Sprintf("failed to initialize user repository: %v", err))
 		}
@@ -98,22 +98,4 @@ func buildEmailSender(deps dependencies.Deps) port.EmailSender {
 		return adapterout.NewSmtpEmailSender(deps.SMTPClient, deps.Config.AppBaseURL)
 	}
 	return adapterout.NewLogEmailSender()
-}
-
-func buildSeedUsers() map[string]*entity.User {
-	users := make(map[string]*entity.User)
-	for i := 1000; i < 1100; i++ {
-		u, err := entity.NewUser(entity.UserArgs{
-			Username:      fmt.Sprintf("test%d", i),
-			Nickname:      fmt.Sprintf("test%d_nickname", i),
-			Password:      "1qazXSW@",
-			Email:         fmt.Sprintf("test%d@test.io", i),
-			EmailVerified: i%2 == 0,
-		})
-		if err != nil {
-			panic(fmt.Sprintf("buildSeedUsers: %v", err))
-		}
-		users[string(u.ID)] = u
-	}
-	return users
 }
