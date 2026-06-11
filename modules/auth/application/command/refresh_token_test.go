@@ -139,6 +139,82 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 	})
 }
 
+func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
+	ctx := context.Background()
+
+	newUseCase := func(rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		return mod
+	}
+
+	cmdFor := func(token string) *RefreshTokenCommand {
+		return &RefreshTokenCommand{GrantType: "refresh_token", ClientID: "APP_ID", RefreshToken: token}
+	}
+
+	assertErrCode := func(t *testing.T, err error, want coreerror.ErrCode) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != want {
+			t.Fatalf("got err %v, want err_code %d", err, want)
+		}
+	}
+
+	t.Run("replayed revoked token — entire family revoked", func(t *testing.T) {
+		stolen := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "stolen-token", Scope: entity.MustParseScope("openid")})
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		otherUser := entity.NewRefreshToken("user-2", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(stolen, sibling, otherUser)
+
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt == nil {
+			t.Error("replay must revoke the user's entire token family")
+		}
+		if rtRepo.tokens[entity.Hash("other-user-token")].RevokedAt != nil {
+			t.Error("replay must not touch other users' tokens")
+		}
+	})
+
+	t.Run("expired token — family left intact", func(t *testing.T) {
+		expired := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "expired-token", Scope: entity.MustParseScope("openid")})
+		expired.ExpiresAt = time.Now().Add(-time.Minute)
+		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(expired, sibling)
+
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("expired-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt != nil {
+			t.Error("expiry is not evidence of theft; family must stay intact")
+		}
+	})
+
+	t.Run("race loser (conditional revoke misses) — family left intact", func(t *testing.T) {
+		active := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "racing-token", Scope: entity.MustParseScope("openid")})
+		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(active, sibling)
+		rtRepo.revokeByHashErr = coreerror.ErrNotFound // another request already rotated it
+
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("racing-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt != nil {
+			t.Error("losing a rotation race is not a replay; family must stay intact")
+		}
+	})
+}
+
 func TestRefreshTokenUseCase(t *testing.T) {
 	ctx := context.Background()
 

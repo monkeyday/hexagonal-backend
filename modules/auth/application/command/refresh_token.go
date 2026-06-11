@@ -12,6 +12,8 @@ import (
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
 	"sc/modules/auth/port"
+
+	"github.com/rs/zerolog/log"
 )
 
 type RefreshTokenCommand struct {
@@ -58,9 +60,9 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 		return nil, autherrors.NewErrInvalidClient()
 	}
 
-	rt, err := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(c.RefreshToken))
-	if err != nil || rt == nil || !rt.IsValid() {
-		return nil, autherrors.NewErrInvalidRefreshToken()
+	rt, err := uc.findActiveRefreshToken(ctx, c.RefreshToken)
+	if err != nil {
+		return nil, err
 	}
 
 	user, err := uc.userRepo.FindByID(ctx, rt.UserID)
@@ -91,6 +93,30 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 	res := &define.TokenResponse{}
 	res.FromEntity(tokens, expireSecs)
 	return res, nil
+}
+
+// findActiveRefreshToken loads the presented token and enforces reuse
+// detection: a revoked token being presented again means it was already
+// rotated once — assume theft and revoke the user's whole token family.
+// Expired tokens are rejected without consequences; expiry is not evidence
+// of theft. Runs outside the rotation transaction on purpose: the family
+// revocation must survive the request failing.
+func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw string) (*entity.RefreshToken, error) {
+	rt, err := uc.refreshTokenRepo.FindByTokenHash(ctx, entity.Hash(raw))
+	if err != nil || rt == nil {
+		return nil, autherrors.NewErrInvalidRefreshToken()
+	}
+	if rt.RevokedAt != nil {
+		log.Warn().Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for user")
+		if err := uc.refreshTokenRepo.RevokeAllForUser(ctx, rt.UserID); err != nil {
+			log.Error().Err(err).Str("user_id", string(rt.UserID)).Msg("failed to revoke token family after replay")
+		}
+		return nil, autherrors.NewErrInvalidRefreshToken()
+	}
+	if !rt.IsValid() {
+		return nil, autherrors.NewErrInvalidRefreshToken()
+	}
+	return rt, nil
 }
 
 func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *entity.RefreshToken, userID entity.UserID, newTokens *entity.IssuedTokens) error {
