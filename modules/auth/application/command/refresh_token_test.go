@@ -19,7 +19,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 	user := newTestUser()
 
 	newValidRT := func() *entity.RefreshToken {
-		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
 	}
 
 	t.Run("concurrent same-token refresh — exactly one succeeds", func(t *testing.T) {
@@ -169,10 +169,10 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 	}
 
 	t.Run("replayed revoked token — entire family revoked", func(t *testing.T) {
-		stolen := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "stolen-token", Scope: entity.MustParseScope("openid")})
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-token", Scope: entity.MustParseScope("openid")})
 		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
-		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
-		otherUser := entity.NewRefreshToken("user-2", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
+		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		otherUser := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(stolen, sibling, otherUser)
 
 		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
@@ -187,9 +187,9 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 	})
 
 	t.Run("expired token — family left intact", func(t *testing.T) {
-		expired := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "expired-token", Scope: entity.MustParseScope("openid")})
+		expired := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "expired-token", Scope: entity.MustParseScope("openid")})
 		expired.ExpiresAt = time.Now().Add(-time.Minute)
-		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(expired, sibling)
 
 		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("expired-token"))
@@ -201,8 +201,8 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 	})
 
 	t.Run("race loser (conditional revoke misses) — family left intact", func(t *testing.T) {
-		active := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "racing-token", Scope: entity.MustParseScope("openid")})
-		sibling := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
+		active := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "racing-token", Scope: entity.MustParseScope("openid")})
+		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(active, sibling)
 		rtRepo.revokeByHashErr = coreerror.ErrNotFound // another request already rotated it
 
@@ -219,7 +219,7 @@ func TestRefreshTokenUseCase(t *testing.T) {
 	ctx := context.Background()
 
 	newValidRT := func() *entity.RefreshToken {
-		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid email profile phone")})
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid email profile phone")})
 	}
 
 	tests := []struct {
@@ -245,6 +245,30 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			wantToken: "new-access",
 		},
 		{
+			name: "token bound to the presenting client — rotated",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "APP_ID",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:       &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			repo:      newMockRepo(newTestUser()),
+			rtRepo:    newMockRefreshTokenRepo(entity.NewRefreshToken("user-1", "APP_ID", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})),
+			wantToken: "new-access",
+		},
+		{
+			name: "token bound to another client — rejected (finding: refresh tokens client-bound)",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "APP_ID",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:         &mockJwtService{},
+			repo:        newMockRepo(newTestUser()),
+			rtRepo:      newMockRefreshTokenRepo(entity.NewRefreshToken("user-1", "client-123", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})),
+			wantErrCode: autherrors.InvalidRefreshToken,
+		},
+		{
 			name: "token not found",
 			cmd: &RefreshTokenCommand{
 				GrantType:    "refresh_token",
@@ -265,12 +289,12 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			wantErrCode: autherrors.InvalidArguments,
 		},
 		{
-			name:        "missing client_id — validation failure",
+			name:        "missing client_id — invalid_client (no client on either channel)",
 			cmd:         &RefreshTokenCommand{GrantType: "refresh_token", RefreshToken: "valid-refresh-token"},
 			jwt:         &mockJwtService{},
 			repo:        newMockRepo(),
 			rtRepo:      newMockRefreshTokenRepo(),
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidClient,
 		},
 		{
 			name:        "missing refresh_token — validation failure",

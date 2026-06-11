@@ -274,16 +274,36 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			wantErrCode: autherrors.InvalidClient,
 		},
 		{
-			name: "confidential client via Basic auth — tokens issued",
+			name: "client_secret_basic client via Basic auth — tokens issued",
+			cmd: &ExchangeCodeCommand{
+				Code:              "basic-code",
+				BasicClientID:     "basic-client",
+				BasicClientSecret: testClientSecret,
+				RedirectURI:       "https://app.example.com/callback",
+			},
+			jwtSvc: &mockJwtService{accessToken: "basic-access", refreshToken: "basic-refresh"},
+			extraCodes: []*entity.AuthCode{
+				{
+					Code:        "basic-code",
+					UserID:      user.ID,
+					ClientID:    new(entity.ClientID("basic-client")),
+					RedirectURI: "https://app.example.com/callback",
+					Scope:       entity.MustParseScope("openid"),
+					ExpiresAt:   time.Now().Add(entity.AuthCodeTTL),
+				},
+			},
+			wantRTPersisted: true,
+		},
+		{
+			name: "client_secret_post client via Basic auth — invalid_client (wrong channel)",
 			cmd: &ExchangeCodeCommand{
 				Code:              "valid-code",
-				ClientID:          "client-123",
 				BasicClientID:     "client-123",
 				BasicClientSecret: testClientSecret,
 				RedirectURI:       "https://app.example.com/callback",
 			},
-			jwtSvc:          &mockJwtService{accessToken: "basic-access", refreshToken: "basic-refresh"},
-			wantRTPersisted: true,
+			jwtSvc:      &mockJwtService{},
+			wantErrCode: autherrors.InvalidClient,
 		},
 		{
 			name:        "public client presenting a secret — invalid_client",
@@ -349,6 +369,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				RefreshTokenRepo: rtRepo,
 				ClientRegistry: newMockClientRegistry(
 					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
+					newTestClient(t, "basic-client", entity.ClientAuthSecretBasic),
 					newTestClient(t, "public-client", entity.ClientAuthNone),
 					newTestClient(t, "password-only-client", entity.ClientAuthSecretPost, entity.GrantPassword),
 				),
@@ -441,6 +462,7 @@ func TestExchangeCodeValidation(t *testing.T) {
 		UserRepo:         newMockRepo(newTestUser()),
 		Cache:            newMockCache(),
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	}))
 
 	cases := []struct {
@@ -448,7 +470,6 @@ func TestExchangeCodeValidation(t *testing.T) {
 		cmd  *ExchangeCodeCommand
 	}{
 		{"missing code", &ExchangeCodeCommand{ClientID: "client-123", RedirectURI: "https://app.example.com/callback"}},
-		{"missing client_id", &ExchangeCodeCommand{Code: "tok", RedirectURI: "https://app.example.com/callback"}},
 		{"missing redirect_uri", &ExchangeCodeCommand{Code: "tok", ClientID: "client-123"}},
 	}
 
@@ -463,6 +484,18 @@ func TestExchangeCodeValidation(t *testing.T) {
 			}
 		})
 	}
+
+	// client_id is no longer required by validation: a Basic-only client is
+	// legitimate (RFC 6749 §2.3). No client on either channel → invalid_client.
+	t.Run("no client on either channel — invalid_client", func(t *testing.T) {
+		_, err := mod.Dispatch(ctx, &ExchangeCodeCommand{Code: "tok", RedirectURI: "https://app.example.com/callback"})
+		if err == nil {
+			t.Fatal("expected invalid_client, got nil")
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.InvalidClient {
+			t.Fatalf("want err_code %d, got %v", autherrors.InvalidClient, err)
+		}
+	})
 }
 
 func TestExchangeCodeCommand_RedirectURIIsNormalized(t *testing.T) {

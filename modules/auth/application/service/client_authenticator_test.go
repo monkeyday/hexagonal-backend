@@ -38,10 +38,21 @@ func TestClientAuthenticator_Authenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient confidential: %v", err)
 	}
+	postClient, err := entity.NewClient(entity.ClientArgs{
+		ID:            "post-client",
+		AuthMethod:    entity.ClientAuthSecretPost,
+		Secret:        secret,
+		RedirectURIs:  []string{"https://app.example.com/callback"},
+		AllowedGrants: []entity.GrantType{entity.GrantAuthorizationCode},
+	})
+	if err != nil {
+		t.Fatalf("NewClient post: %v", err)
+	}
 
 	auth := NewClientAuthenticator(&stubRegistry{clients: map[entity.ClientID]*entity.Client{
 		public.ID:       public,
 		confidential.ID: confidential,
+		postClient.ID:   postClient,
 	}})
 
 	tests := []struct {
@@ -61,14 +72,29 @@ func TestClientAuthenticator_Authenticate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "confidential client via form secret — ok",
-			creds:  ClientCredentials{ClientID: "conf-client", FormSecret: secret},
-			wantID: "conf-client",
+			name:    "client_secret_basic client via form secret — rejected (wrong channel)",
+			creds:   ClientCredentials{ClientID: "conf-client", FormSecret: secret},
+			wantErr: true,
 		},
 		{
 			name:   "confidential client via Basic — ok",
 			creds:  ClientCredentials{BasicClientID: "conf-client", BasicSecret: secret},
 			wantID: "conf-client",
+		},
+		{
+			name:   "client_secret_post client via form secret — ok",
+			creds:  ClientCredentials{ClientID: "post-client", FormSecret: secret},
+			wantID: "post-client",
+		},
+		{
+			name:    "client_secret_post client via Basic — rejected (wrong channel)",
+			creds:   ClientCredentials{BasicClientID: "post-client", BasicSecret: secret},
+			wantErr: true,
+		},
+		{
+			name:    "public client identified via Basic header — rejected",
+			creds:   ClientCredentials{BasicClientID: "public-client"},
+			wantErr: true,
 		},
 		{
 			name:   "Basic plus matching form client_id — ok",

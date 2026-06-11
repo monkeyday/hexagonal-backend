@@ -18,6 +18,7 @@ var _ port.RefreshTokenRepository = (*FileRefreshTokenRepository)(nil)
 type refreshTokenDoc struct {
 	ID              string     `json:"id"               bson:"_id"`
 	UserID          string     `json:"user_id"          bson:"user_id"`
+	ClientID        string     `json:"client_id"        bson:"client_id"`
 	TokenHash       string     `json:"token_hash"       bson:"token_hash"`
 	Scope           string     `json:"scope"            bson:"scope"` // stored as a space-separated string
 	DeviceID        string     `json:"device_id"        bson:"device_id"`
@@ -31,6 +32,7 @@ func rtToDoc(rt *entity.RefreshToken) *refreshTokenDoc {
 	return &refreshTokenDoc{
 		ID:              rt.ID,
 		UserID:          string(rt.UserID),
+		ClientID:        string(rt.ClientID),
 		TokenHash:       rt.TokenHash,
 		Scope:           rt.Scope.String(),
 		DeviceID:        rt.DeviceID,
@@ -49,6 +51,7 @@ func rtToEntity(d *refreshTokenDoc) (*entity.RefreshToken, error) {
 	return &entity.RefreshToken{
 		ID:              d.ID,
 		UserID:          entity.UserID(d.UserID),
+		ClientID:        entity.ClientID(d.ClientID),
 		TokenHash:       d.TokenHash,
 		Scope:           scope,
 		DeviceID:        d.DeviceID,

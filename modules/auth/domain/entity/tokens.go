@@ -19,6 +19,7 @@ type IssuedTokens struct {
 type RefreshToken struct {
 	ID              string
 	UserID          UserID
+	ClientID        ClientID // client the token was issued to; empty when the grant had no authenticated client (password grant)
 	TokenHash       string
 	Scope           Scope
 	DeviceID        string
@@ -28,11 +29,12 @@ type RefreshToken struct {
 	RevokedAt       *time.Time
 }
 
-func NewRefreshToken(userID UserID, tokens *IssuedTokens) *RefreshToken {
+func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *RefreshToken {
 	now := time.Now()
 	return &RefreshToken{
 		ID:              uuid.NewString(),
 		UserID:          userID,
+		ClientID:        clientID,
 		TokenHash:       Hash(tokens.RefreshToken),
 		Scope:           tokens.Scope,
 		AuthenticatedAt: now,
@@ -42,12 +44,19 @@ func NewRefreshToken(userID UserID, tokens *IssuedTokens) *RefreshToken {
 }
 
 // Rotate creates a new RefreshToken for token rotation, carrying forward the stable
-// AuthenticatedAt and DeviceID from the original authentication event.
+// ClientID, AuthenticatedAt and DeviceID from the original authentication event.
 func (rt *RefreshToken) Rotate(userID UserID, tokens *IssuedTokens) *RefreshToken {
-	n := NewRefreshToken(userID, tokens)
+	n := NewRefreshToken(userID, rt.ClientID, tokens)
 	n.AuthenticatedAt = rt.AuthenticatedAt
 	n.DeviceID = rt.DeviceID
 	return n
+}
+
+// IssuedTo reports whether the token is bound to the given client. Tokens
+// issued without an authenticated client (password grant) are unbound and
+// match any client.
+func (rt *RefreshToken) IssuedTo(clientID ClientID) bool {
+	return rt.ClientID == "" || rt.ClientID == clientID
 }
 
 func (rt *RefreshToken) IsValid() bool {

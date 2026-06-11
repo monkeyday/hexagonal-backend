@@ -1,9 +1,15 @@
 /**
  * Smoke test — POST /oidc/introspect
  *
+ * RFC 7662 §2.1: introspection requires an authenticated confidential client.
+ * The smoke client is public, so every caller here must be rejected with 401 —
+ * a bearer access token is end-user authentication, not client authentication.
+ * The positive path (active/inactive responses for a confidential client) is
+ * covered by the Go unit tests.
+ *
  * Run:  k6 run smoke_test/introspect.js
  */
-import http from 'k6/http';
+import http, { expectedStatuses } from 'k6/http';
 import { check } from 'k6';
 import { smokeOptions, BASE_URL, ensureUser, getTokens } from './helpers.js';
 
@@ -17,46 +23,30 @@ export function setup() {
 }
 
 export default function (tokens) {
-  const bearerHeaders = {
-    ...JSON_HEADERS,
-    Authorization: `Bearer ${tokens.access_token}`,
-  };
-
-  // ── Active access token ──────────────────────────────────────────────────────
-  const activeJWT = http.post(
+  // ── Bearer token only — not client authentication ───────────────────────────
+  const bearerOnly = http.post(
     `${BASE_URL}/oidc/introspect`,
     JSON.stringify({ token: tokens.access_token }),
-    { headers: bearerHeaders },
+    {
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${tokens.access_token}` },
+      responseCallback: expectedStatuses(401),
+    },
   );
-  check(activeJWT, {
-    'access token: status 200':    (r) => r.status === 200,
-    'access token: active=true':   (r) => r.json('active') === true,
-    'access token: has sub':       (r) => !!r.json('sub'),
-    'access token: has iss':       (r) => !!r.json('iss'),
-    'access token: has exp':       (r) => r.json('exp') > 0,
-    'access token: token_type':    (r) => r.json('token_type') === 'Bearer',
-  });
+  check(bearerOnly, { 'bearer-only introspect: status 401': (r) => r.status === 401 });
 
-  // ── Active refresh token (opaque, hint required) ─────────────────────────────
-  const activeOpaque = http.post(
+  // ── No credentials at all ────────────────────────────────────────────────────
+  const anonymous = http.post(
     `${BASE_URL}/oidc/introspect`,
-    JSON.stringify({ token: tokens.refresh_token, token_type_hint: 'refresh_token' }),
-    { headers: bearerHeaders },
+    JSON.stringify({ token: tokens.access_token }),
+    { headers: JSON_HEADERS, responseCallback: expectedStatuses(401) },
   );
-  check(activeOpaque, {
-    'refresh token: status 200':  (r) => r.status === 200,
-    'refresh token: active=true': (r) => r.json('active') === true,
-  });
+  check(anonymous, { 'anonymous introspect: status 401': (r) => r.status === 401 });
 
-  // ── Revoked / unknown token — should return active=false ────────────────────
-  const inactive = http.post(
+  // ── Bare public client_id — identification, not authentication ──────────────
+  const publicClient = http.post(
     `${BASE_URL}/oidc/introspect`,
-    JSON.stringify({ token: 'revoked-or-unknown-token' }),
-    { headers: bearerHeaders },
+    JSON.stringify({ token: tokens.access_token, client_id: 'smoke-client' }),
+    { headers: JSON_HEADERS, responseCallback: expectedStatuses(401) },
   );
-  check(inactive, {
-    'inactive token: status 200':   (r) => r.status === 200,
-    'inactive token: active=false': (r) => r.json('active') === false,
-    'inactive token: no sub leak':  (r) => !r.json('sub'),
-  });
+  check(publicClient, { 'public client_id introspect: status 401': (r) => r.status === 401 });
 }

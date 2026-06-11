@@ -254,31 +254,22 @@ export default function (tokens) {
   // ── POST /oidc/introspect ─────────────────────────────────────────────────────
   group('POST /oidc/introspect', () => {
     const fresh = getTokens();
-    const ih = { ...JSON_HEADERS, Authorization: `Bearer ${fresh.access_token}` };
 
-    const active = http.post(
+    // RFC 7662 §2.1: introspection requires an authenticated confidential
+    // client. The smoke client is public, so every caller below must get 401 —
+    // including one holding a valid bearer token, which is end-user (not
+    // client) authentication. The positive path needs a confidential client
+    // in the registry; unit tests cover it.
+    const bearerOnly = http.post(
       `${BASE_URL}/oidc/introspect`,
       JSON.stringify({ token: fresh.access_token }),
-      { headers: ih },
+      {
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${fresh.access_token}` },
+        responseCallback: expectedStatuses(401),
+      },
     );
-    check(active, {
-      'active: status 200':  (r) => r.status === 200,
-      'active: active=true': (r) => r.json('active') === true,
-      'active: has sub':     (r) => !!r.json('sub'),
-    });
+    check(bearerOnly, { 'bearer-only introspect: status 401': (r) => r.status === 401 });
 
-    const inactive = http.post(
-      `${BASE_URL}/oidc/introspect`,
-      JSON.stringify({ token: 'revoked-token' }),
-      { headers: ih },
-    );
-    check(inactive, {
-      'inactive: status 200':   (r) => r.status === 200,
-      'inactive: active=false': (r) => r.json('active') === false,
-    });
-
-    // RFC 7662 §2.1: introspection must never be open; a public client_id
-    // alone is not authentication either.
     const anonymous = http.post(
       `${BASE_URL}/oidc/introspect`,
       JSON.stringify({ token: fresh.access_token }),

@@ -17,7 +17,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 	ctx := context.Background()
 
 	testRefreshToken := func() *entity.RefreshToken {
-		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid email profile phone")})
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid email profile phone")})
 	}
 
 	newMod := func(jwtSvc *mockJwtService, cache *mockCache, repo *mockUserRepo, rtRepo *mockRefreshTokenRepo) *usecase.Registry {
@@ -332,7 +332,7 @@ func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
 	}
 
 	seedRT := func() *entity.RefreshToken {
-		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "rt-1", Scope: entity.MustParseScope("openid")})
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-1", Scope: entity.MustParseScope("openid")})
 	}
 
 	t.Run("no bearer and no client credentials — invalid_client", func(t *testing.T) {

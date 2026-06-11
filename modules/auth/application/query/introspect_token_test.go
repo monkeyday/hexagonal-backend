@@ -42,7 +42,7 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 	}{
 		{
 			name:       "valid access token — active response with all fields",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "valid-token"},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			wantActive: true,
 			wantSub:    "user-1",
@@ -54,19 +54,19 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 		},
 		{
 			name:       "invalid token — inactive response",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "bad-token"},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "bad-token"},
 			jwt:        &mockJwtService{parseErr: errors.New("invalid token")},
 			wantActive: false,
 		},
 		{
 			name:       "ParseJWT returns (nil, nil) — inactive",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "opaque-token"},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "opaque-token"},
 			jwt:        &mockJwtService{},
 			wantActive: false,
 		},
 		{
 			name:       "refresh_token hint with valid JWT — active (hint is advisory)",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "some-token", TokenTypeHint: new("refresh_token")},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "some-token", TokenTypeHint: new("refresh_token")},
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			wantActive: true,
 			wantSub:    "user-1",
@@ -78,7 +78,7 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 		},
 		{
 			name:       "access_token hint — active response",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "valid-token", TokenTypeHint: new("access_token")},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token", TokenTypeHint: new("access_token")},
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			wantActive: true,
 			wantSub:    "user-1",
@@ -87,14 +87,14 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 		},
 		{
 			name:       "revoked token — inactive (blacklisted JTI)",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "valid-token"},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			cache:      newMockCache().seed("blacklist:jti-abc", true),
 			wantActive: false,
 		},
 		{
 			name:       "cache error — fail-closed inactive",
-			query:      &IntrospectTokenQuery{CallerID: "user-1", Token: "valid-token"},
+			query:      &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			cache:      &mockCache{items: make(map[string]any), getErr: errors.New("cache unavailable")},
 			wantActive: false,
@@ -103,7 +103,10 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			deps := define.Dependencies{JWTSvc: tc.jwt}
+			deps := define.Dependencies{
+				JWTSvc:         tc.jwt,
+				ClientRegistry: newMockClientRegistryOf(newTestClient(t, "conf-client", entity.ClientAuthSecretBasic)),
+			}
 			if tc.cache != nil {
 				deps.Cache = tc.cache
 			}
@@ -157,7 +160,7 @@ func TestIntrospectTokenUseCase_Validation(t *testing.T) {
 	mod.Register(IntrospectTokenQuery{}, NewIntrospectTokenUseCase(define.Dependencies{JWTSvc: &mockJwtService{}}))
 
 	t.Run("invalid token_type_hint — validation error", func(t *testing.T) {
-		_, err := mod.Dispatch(ctx, &IntrospectTokenQuery{CallerID: "user-1", Token: "tok", TokenTypeHint: new("invalid_hint")})
+		_, err := mod.Dispatch(ctx, &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "tok", TokenTypeHint: new("invalid_hint")})
 		if err == nil {
 			t.Fatal("expected validation error for invalid token_type_hint, got nil")
 		}

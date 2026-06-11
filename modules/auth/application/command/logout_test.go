@@ -15,7 +15,7 @@ func TestLogoutUseCase(t *testing.T) {
 	ctx := context.Background()
 
 	seedRT := func() *entity.RefreshToken {
-		return entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "rt-token", Scope: entity.MustParseScope("openid")})
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-token", Scope: entity.MustParseScope("openid")})
 	}
 	validAccessClaims := &corejwt.Claims{
 		Subject:   "user-1",
@@ -182,8 +182,8 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("bearer for user-1 — user-2 tokens untouched", func(t *testing.T) {
-		rtUser1 := entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "rt-user1", Scope: entity.MustParseScope("openid")})
-		rtUser2 := entity.NewRefreshToken("user-2", &entity.IssuedTokens{RefreshToken: "rt-user2", Scope: entity.MustParseScope("openid")})
+		rtUser1 := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-user1", Scope: entity.MustParseScope("openid")})
+		rtUser2 := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "rt-user2", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(rtUser1, rtUser2)
 
 		deps := define.Dependencies{

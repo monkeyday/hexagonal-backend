@@ -18,7 +18,7 @@ import (
 
 type RefreshTokenCommand struct {
 	GrantType         string `form:"grant_type" json:"grant_type" validate:"required"`
-	ClientID          string `form:"client_id" json:"client_id" validate:"required"`
+	ClientID          string `form:"client_id" json:"client_id"`
 	ClientSecret      string `form:"client_secret" json:"client_secret"`
 	BasicClientID     string `ctx:"basic_client_id"`
 	BasicClientSecret string `ctx:"basic_client_secret"`
@@ -65,6 +65,12 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 		return nil, err
 	}
 
+	// A refresh token may only be rotated by the client it was issued to
+	// (RFC 6749 §6); a mismatch suggests a token stolen from another client.
+	if !rt.IssuedTo(client.ID) {
+		return nil, autherrors.NewErrInvalidRefreshToken()
+	}
+
 	user, err := uc.userRepo.FindByID(ctx, rt.UserID)
 	if err != nil || user == nil {
 		return nil, autherrors.NewErrInvalidRefreshToken()
@@ -78,7 +84,7 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 
 	tokens, err := uc.tokenIssuanceService.IssueTokens(domainService.IssueTokensArgs{
 		User:       user,
-		ClientID:   entity.ClientID(c.ClientID),
+		ClientID:   client.ID,
 		Scope:      rt.Scope,
 		ExpireSecs: expireSecs,
 	})

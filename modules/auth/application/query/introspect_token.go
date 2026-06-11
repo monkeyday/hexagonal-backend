@@ -13,7 +13,6 @@ import (
 )
 
 type IntrospectTokenQuery struct {
-	CallerID          string  `ctx:"user_id"`
 	ClientID          string  `form:"client_id" json:"client_id"`
 	ClientSecret      string  `form:"client_secret" json:"client_secret"`
 	BasicClientID     string  `ctx:"basic_client_id"`
@@ -81,13 +80,10 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 }
 
 // authorizeCaller enforces RFC 7662 §2.1: introspection must never be open.
-// Accepted callers: a valid bearer token (verified by the middleware) or an
-// authenticated confidential client. A bare public client_id is not
-// authentication — allowing it would turn introspection into a token oracle.
+// Only an authenticated confidential client may introspect. A bearer token or
+// a bare public client_id is not enough — either would turn introspection
+// into a token oracle for any end user holding a valid access token.
 func (uc *IntrospectTokenUseCase) authorizeCaller(ctx context.Context, q *IntrospectTokenQuery) error {
-	if q.CallerID != "" {
-		return nil
-	}
 	if q.ClientID == "" && q.BasicClientID == "" {
 		return autherrors.NewErrInvalidClient()
 	}

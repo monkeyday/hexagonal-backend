@@ -43,7 +43,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 			name:           "valid token and strong password — success",
 			cmd:            &ResetPasswordCommand{Token: rawToken, Password: newPassword},
 			repo:           newUserWithResetToken(rawToken, false),
-			rtRepo:         newMockRefreshTokenRepo(entity.NewRefreshToken("user-1", &entity.IssuedTokens{RefreshToken: "rt-token", Scope: entity.MustParseScope("openid")})),
+			rtRepo:         newMockRefreshTokenRepo(entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-token", Scope: entity.MustParseScope("openid")})),
 			wantRevoked:    true,
 			wantRTsRevoked: true,
 		},

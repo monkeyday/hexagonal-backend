@@ -31,9 +31,11 @@ func NewClientAuthenticator(registry port.ClientRegistry) *ClientAuthenticator {
 
 // Authenticate returns the client when the credentials prove it:
 // public clients must present no secret (PKCE is enforced by the caller),
-// confidential clients must present a verifying secret via Basic or form.
+// confidential clients must present a verifying secret via the channel they
+// registered as token_endpoint_auth_method (RFC 8414): client_secret_basic
+// credentials are not accepted over the form channel, and vice versa.
 func (s *ClientAuthenticator) Authenticate(ctx context.Context, creds ClientCredentials) (*entity.Client, error) {
-	clientID, secret, err := resolveCredentialChannel(creds)
+	clientID, secret, viaBasic, err := resolveCredentialChannel(creds)
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +48,24 @@ func (s *ClientAuthenticator) Authenticate(ctx context.Context, creds ClientCred
 		return nil, errors.New("unknown client")
 	}
 
-	if client.IsPublic() {
-		if secret != "" {
-			return nil, errors.New("public client must not present a secret")
+	switch client.AuthMethod {
+	case entity.ClientAuthNone:
+		if viaBasic || secret != "" {
+			return nil, errors.New("public client must not present credentials")
 		}
 		return client, nil
+	case entity.ClientAuthSecretBasic:
+		if !viaBasic {
+			return nil, errors.New("client must authenticate with client_secret_basic")
+		}
+	case entity.ClientAuthSecretPost:
+		if viaBasic {
+			return nil, errors.New("client must authenticate with client_secret_post")
+		}
+	default:
+		return nil, errors.New("unsupported client auth method")
 	}
+
 	if err := client.VerifySecret(secret); err != nil {
 		return nil, errors.New("client authentication failed")
 	}
@@ -60,12 +74,12 @@ func (s *ClientAuthenticator) Authenticate(ctx context.Context, creds ClientCred
 
 // resolveCredentialChannel picks Basic over form (RFC 6749 §2.3) and rejects
 // requests that identify two different clients across the channels.
-func resolveCredentialChannel(creds ClientCredentials) (clientID, secret string, err error) {
+func resolveCredentialChannel(creds ClientCredentials) (clientID, secret string, viaBasic bool, err error) {
 	if creds.BasicClientID == "" {
-		return creds.ClientID, creds.FormSecret, nil
+		return creds.ClientID, creds.FormSecret, false, nil
 	}
 	if creds.ClientID != "" && creds.ClientID != creds.BasicClientID {
-		return "", "", errors.New("client_id mismatch between Basic auth and request body")
+		return "", "", false, errors.New("client_id mismatch between Basic auth and request body")
 	}
-	return creds.BasicClientID, creds.BasicSecret, nil
+	return creds.BasicClientID, creds.BasicSecret, true, nil
 }

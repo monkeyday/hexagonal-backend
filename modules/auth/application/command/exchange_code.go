@@ -17,7 +17,7 @@ import (
 
 type ExchangeCodeCommand struct {
 	Code              string `form:"code"          validate:"required"`
-	ClientID          string `form:"client_id"     validate:"required"`
+	ClientID          string `form:"client_id"`
 	ClientSecret      string `form:"client_secret"`
 	BasicClientID     string `ctx:"basic_client_id"`
 	BasicClientSecret string `ctx:"basic_client_secret"`
@@ -71,7 +71,7 @@ func (uc *ExchangeCodeUseCase) Execute(ctx context.Context, cmd any) (any, error
 	if client.IsPublic() && authCode.CodeChallenge == nil {
 		return nil, autherrors.NewErrInvalidGrant()
 	}
-	if !authCode.IsValid(c.ClientID, c.RedirectURI, c.CodeVerifier) {
+	if !authCode.IsValid(string(client.ID), c.RedirectURI, c.CodeVerifier) {
 		return nil, autherrors.NewErrInvalidGrant()
 	}
 
@@ -82,23 +82,23 @@ func (uc *ExchangeCodeUseCase) Execute(ctx context.Context, cmd any) (any, error
 
 	expireSecs := define.ResolveExpirySecs(c.ExpireSecs)
 
-	tokens, err := uc.issueTokens(c.ClientID, expireSecs, authCode, user)
+	tokens, err := uc.issueTokens(client.ID, expireSecs, authCode, user)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := uc.saveRefreshToken(ctx, user.ID, tokens); err != nil {
+	if err := uc.saveRefreshToken(ctx, user.ID, client.ID, tokens); err != nil {
 		return nil, err
 	}
 
-	log.Info().Str("user_id", string(user.ID)).Str("client_id", c.ClientID).Msg("code exchanged for tokens")
+	log.Info().Str("user_id", string(user.ID)).Str("client_id", string(client.ID)).Msg("code exchanged for tokens")
 
 	res := &define.TokenResponse{}
 	res.FromEntity(tokens, expireSecs)
 	return res, nil
 }
 
-func (uc *ExchangeCodeUseCase) issueTokens(clientID string, expireSecs int, authCode *entity.AuthCode, user *entity.User) (*entity.IssuedTokens, error) {
+func (uc *ExchangeCodeUseCase) issueTokens(clientID entity.ClientID, expireSecs int, authCode *entity.AuthCode, user *entity.User) (*entity.IssuedTokens, error) {
 	nonce := ""
 	if authCode.Nonce != nil {
 		nonce = *authCode.Nonce
@@ -106,15 +106,15 @@ func (uc *ExchangeCodeUseCase) issueTokens(clientID string, expireSecs int, auth
 
 	return uc.tokenIssuanceService.IssueTokens(service.IssueTokensArgs{
 		User:       user,
-		ClientID:   entity.ClientID(clientID),
+		ClientID:   clientID,
 		Nonce:      nonce,
 		Scope:      authCode.Scope,
 		ExpireSecs: expireSecs,
 	})
 }
 
-func (uc *ExchangeCodeUseCase) saveRefreshToken(ctx context.Context, userID entity.UserID, tokens *entity.IssuedTokens) error {
-	rt := entity.NewRefreshToken(userID, tokens)
+func (uc *ExchangeCodeUseCase) saveRefreshToken(ctx context.Context, userID entity.UserID, clientID entity.ClientID, tokens *entity.IssuedTokens) error {
+	rt := entity.NewRefreshToken(userID, clientID, tokens)
 	return uc.refreshTokenRepo.Save(ctx, rt)
 }
 

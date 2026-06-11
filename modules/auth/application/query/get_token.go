@@ -90,7 +90,7 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 		return nil, err
 	}
 
-	rt := entity.NewRefreshToken(user.ID, tokens)
+	rt := entity.NewRefreshToken(user.ID, "", tokens)
 	if err := uc.refreshTokenRepo.Save(ctx, rt); err != nil {
 		return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
 	}
