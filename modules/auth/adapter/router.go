@@ -8,6 +8,7 @@ import (
 	"sc/modules/auth/application/command"
 	"sc/modules/auth/application/query"
 	"sc/modules/auth/port"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,6 +17,10 @@ const (
 	grantTypeRefreshToken = "refresh_token"
 	grantTypeAuthCode     = "authorization_code"
 	grantTypePassword     = "password"
+
+	// discoveryCacheTTL applies to the public, non-sensitive metadata
+	// endpoints (discovery, JWKS); everything else is no-store.
+	discoveryCacheTTL = 5 * time.Minute
 )
 
 type Router struct {
@@ -40,7 +45,7 @@ func (ro *Router) registerPublicRoutes(r *gin.Engine) {
 	r.GET("/authorize", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
 	kc := r.Group("/protocol/openid-connect")
 	kc.GET("/auth", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
-	kc.GET("/certs", webHandler.Handle[query.GetJWKSQuery](ro.module))
+	kc.GET("/certs", middleware.CachePublic(discoveryCacheTTL), webHandler.Handle[query.GetJWKSQuery](ro.module))
 
 	// password grant is intentionally — restricted to internal/trusted clients,
 	// not exposed to public or browser-based consumers.
@@ -62,8 +67,8 @@ func (ro *Router) registerPublicRoutes(r *gin.Engine) {
 	r.POST("/sign-in", webHandler.Handle[command.CreateAuthCodeCommand](ro.module))
 	r.POST("/forgot-password", webHandler.Handle[command.ForgotPasswordCommand](ro.module))
 	r.POST("/reset-password", webHandler.Handle[command.ResetPasswordCommand](ro.module))
-	r.GET("/.well-known/openid-configuration", webHandler.Handle[query.GetDiscoveryQuery](ro.module))
-	r.GET("/.well-known/jwks.json", webHandler.Handle[query.GetJWKSQuery](ro.module))
+	r.GET("/.well-known/openid-configuration", middleware.CachePublic(discoveryCacheTTL), webHandler.Handle[query.GetDiscoveryQuery](ro.module))
+	r.GET("/.well-known/jwks.json", middleware.CachePublic(discoveryCacheTTL), webHandler.Handle[query.GetJWKSQuery](ro.module))
 }
 
 func (ro *Router) registerOIDCRoutes(r *gin.Engine) {

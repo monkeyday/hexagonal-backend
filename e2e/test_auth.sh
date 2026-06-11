@@ -364,8 +364,11 @@ fi
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 section "Metrics"
+METRICS_URL="${METRICS_URL:-http://127.0.0.1:9878}"
 split_resp "$(do_req "$BASE_URL/debug/vars")"
-check_status "GET /debug/vars" "200" "$STATUS"
+check_status "GET /debug/vars (public) → 404" "404" "$STATUS"
+split_resp "$(do_req "$METRICS_URL/debug/vars")"
+check_status "GET /debug/vars (internal metrics listener)" "200" "$STATUS"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import crypto from 'k6/crypto';
 import encoding from 'k6/encoding';
 
 export const BASE_URL    = __ENV.BASE_URL || 'http://localhost:9876';
+export const METRICS_URL = __ENV.METRICS_URL || 'http://127.0.0.1:9878';
 export const REDIRECT_URI = 'https://app.example.com/callback';
 
 // Credentials used by tests that need a real user.

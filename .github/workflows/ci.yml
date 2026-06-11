@@ -76,6 +76,7 @@ jobs:
           OAUTH_CLIENT_ID=my_client
           OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
+          METRICS_ADDR=127.0.0.1:9878
           EOF
 
       - name: Build server
@@ -125,6 +126,7 @@ jobs:
           OAUTH_CLIENT_ID=smoke-client
           OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
+          METRICS_ADDR=127.0.0.1:9878
           EOF
 
       - name: Build server

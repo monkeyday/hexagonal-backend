@@ -72,6 +72,7 @@ func Load(entryPath string) *Settings {
 				Port:         os.Getenv("PORT"),
 				CorsOrigins:  parseCorsOrigins(os.Getenv("CORS_ORIGINS")),
 				CookieSecure: os.Getenv("COOKIE_SECURE") == "true",
+				MetricsAddr:  os.Getenv("METRICS_ADDR"),
 			},
 			JWT: infrajwt.Config{
 				PrivateKeyPath: os.Getenv("PRIVATE_KEY_PATH"),

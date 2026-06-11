@@ -4,6 +4,7 @@ import (
 	"context"
 	"expvar"
 	"html/template"
+	"net/http"
 	"sc/assets"
 	corecache "sc/core/cache"
 	"sc/core/usecase"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 type HTTPErrorMapper interface {
@@ -60,15 +62,32 @@ func (e *Engine) start(modules []HTTPModule, args Args) error {
 	e.SetHTMLTemplate(tmpl)
 	e.setMiddlewares(args)
 	e.wire(modules)
+	startMetricsServer(args.Server.MetricsAddr)
 	return e.run(args.Server.Port, args.Cleanup)
 }
 
 func (e *Engine) setMiddlewares(args Args) {
 	e.Use(middleware.Logger())
+	e.Use(middleware.SecurityHeaders())
 	e.Use(middleware.Cors(args.Server.CorsOrigins))
 	e.Use(middleware.CookieSecure(args.Server.CookieSecure))
 	e.Use(middleware.DistributedRateLimit(args.Cache, 1000, time.Minute))
-	e.GET("/debug/vars", gin.WrapH(expvar.Handler()))
+}
+
+// startMetricsServer exposes expvar on a separate internal-only listener.
+// expvar publishes cmdline and memstats; it must never sit on the public
+// engine. Empty addr disables it.
+func startMetricsServer(addr string) {
+	if addr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/debug/vars", expvar.Handler())
+	go func() {
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Error().Err(err).Str("addr", addr).Msg("metrics server stopped")
+		}
+	}()
 }
 
 func (e *Engine) wire(modules []HTTPModule) {

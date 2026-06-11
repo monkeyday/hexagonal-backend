@@ -3,9 +3,9 @@
  *
  * Run:  k6 run smoke_test/debug_vars.js
  */
-import http from 'k6/http';
+import http, { expectedStatuses } from 'k6/http';
 import { check } from 'k6';
-import { smokeOptions, BASE_URL } from './helpers.js';
+import { smokeOptions, BASE_URL, METRICS_URL } from './helpers.js';
 
 export const options = smokeOptions;
 
@@ -16,7 +16,11 @@ const EXPECTED_COUNTERS = [
 ];
 
 export default function () {
-  const res = http.get(`${BASE_URL}/debug/vars`);
+  // The public listener must not expose expvar (cmdline, memstats).
+  const pub = http.get(`${BASE_URL}/debug/vars`, { responseCallback: expectedStatuses(404) });
+  check(pub, { 'public /debug/vars: status 404': (r) => r.status === 404 });
+
+  const res = http.get(`${METRICS_URL}/debug/vars`);
 
   check(res, {
     'status 200':       (r) => r.status === 200,

@@ -6,7 +6,7 @@
  */
 import http, { expectedStatuses } from 'k6/http';
 import { check, group } from 'k6';
-import { smokeOptions, BASE_URL, EMAIL, PASSWORD, REDIRECT_URI, ensureUser, getTokens, startAuthFlow, pkceParams } from './helpers.js';
+import { smokeOptions, BASE_URL, METRICS_URL, EMAIL, PASSWORD, REDIRECT_URI, ensureUser, getTokens, startAuthFlow, pkceParams } from './helpers.js';
 
 export const options = smokeOptions;
 
@@ -351,7 +351,10 @@ export default function (tokens) {
 
   // ── GET /debug/vars ───────────────────────────────────────────────────────────
   group('GET /debug/vars', () => {
-    const res = http.get(`${BASE_URL}/debug/vars`);
+    const pub = http.get(`${BASE_URL}/debug/vars`, { responseCallback: expectedStatuses(404) });
+    check(pub, { 'public: status 404': (r) => r.status === 404 });
+
+    const res = http.get(`${METRICS_URL}/debug/vars`);
     check(res, {
       'status 200':                          (r) => r.status === 200,
       'has auth_tokens_issued_total':        (r) => r.json('auth_tokens_issued_total') !== undefined,
