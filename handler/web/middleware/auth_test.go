@@ -157,7 +157,8 @@ func newAuthRouter(svc TokenParser, c *mockCache) *gin.Engine {
 
 func TestAuthenticate(t *testing.T) {
 	exp := new(time.Now().Add(time.Hour))
-	validClaims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer"}
+	validClaims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "valid-jti"}
+	noJTIClaims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer"}
 	revokedClaims := &corejwt.Claims{
 		Subject:   "user-42",
 		Issuer:    "test-issuer",
@@ -242,6 +243,14 @@ func TestAuthenticate(t *testing.T) {
 			name:        "ParseJWT returns nil claims — 401",
 			authHeader:  "Bearer nil-claims",
 			svc:         &mockJwtService{claims: nil},
+			cache:       newMockCache(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "token without jti — rejected, cannot be blacklist-checked — 401",
+			authHeader:  "Bearer no-jti-token",
+			svc:         &mockJwtService{claims: noJTIClaims},
 			cache:       newMockCache(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,

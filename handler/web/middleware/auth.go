@@ -56,7 +56,16 @@ func Authenticate(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
 			return
 		}
 
-		if claims.ID != "" && c != nil {
+		// A token without jti cannot be checked against the revocation
+		// blacklist, so it must be rejected, not waved through.
+		if claims.ID == "" {
+			ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
+			res.Response(nil, coreerror.New(coreerror.Unauthorized, 401, "invalid token"), false)
+			ctx.Abort()
+			return
+		}
+
+		if c != nil {
 			revoked, err := c.GetErr(ctx.Request.Context(), fmt.Sprintf(define.BlacklistCacheKey, claims.ID), nil)
 			if err != nil || revoked {
 				ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)

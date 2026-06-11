@@ -9,11 +9,20 @@ import (
 	"fmt"
 	"os"
 	corejwt "sc/core/jwt"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
+)
+
+const (
+	tokenUseClaim  = "token_use"
+	tokenUseAccess = "access"
+	tokenUseID     = "id"
+	// TODO: replace with audience(s) from client registry once built
+	accessTokenAudience = "APP_ID"
 )
 
 var (
@@ -65,13 +74,14 @@ func (j *JWTService) Close() {
 func (j *JWTService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
 	now := time.Now()
 	return j.signToken(jwt.MapClaims{
-		"sub":   userID,
-		"aud":   "APP_ID", // TODO: replace with audience(s) from client registry once built
-		"scope": scope,
-		"iat":   now.Unix(),
-		"exp":   now.Add(time.Second * time.Duration(expireSecs)).Unix(),
-		"jti":   uuid.NewString(),
-		"iss":   j.Issuer,
+		"sub":         userID,
+		"aud":         accessTokenAudience,
+		"scope":       scope,
+		"iat":         now.Unix(),
+		"exp":         now.Add(time.Second * time.Duration(expireSecs)).Unix(),
+		"jti":         uuid.NewString(),
+		"iss":         j.Issuer,
+		tokenUseClaim: tokenUseAccess,
 	}, userID)
 }
 
@@ -93,6 +103,7 @@ func (j *JWTService) GenIDToken(userID, clientID, email, nonce string, emailVeri
 		"exp":            now.Add(time.Second * time.Duration(expireSecs)).Unix(),
 		"email":          email,
 		"email_verified": emailVerified,
+		tokenUseClaim:    tokenUseID,
 	}
 	if nonce != "" {
 		claims["nonce"] = nonce
@@ -108,7 +119,8 @@ func (j *JWTService) GetIssuer() string { return j.Issuer }
 
 type accessTokenClaims struct {
 	jwt.RegisteredClaims
-	Scope string `json:"scope"`
+	Scope    string `json:"scope"`
+	TokenUse string `json:"token_use"`
 }
 
 type idTokenClaims struct {
@@ -116,6 +128,7 @@ type idTokenClaims struct {
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
 	Nonce         string `json:"nonce,omitempty"`
+	TokenUse      string `json:"token_use"`
 }
 
 func (j *JWTService) ParseJWT(tokenString string) (*corejwt.Claims, error) {
@@ -128,6 +141,15 @@ func (j *JWTService) ParseJWT(tokenString string) (*corejwt.Claims, error) {
 		return nil, errors.New("invalid token")
 	}
 	parsed := token.Claims.(*accessTokenClaims)
+	if parsed.Issuer != j.Issuer {
+		return nil, errors.New("invalid issuer")
+	}
+	if !slices.Contains(parsed.Audience, accessTokenAudience) {
+		return nil, errors.New("invalid audience")
+	}
+	if parsed.TokenUse != tokenUseAccess {
+		return nil, errors.New("not an access token")
+	}
 	out := &corejwt.Claims{
 		Subject:  parsed.Subject,
 		Scope:    parsed.Scope,
@@ -154,6 +176,12 @@ func (j *JWTService) ParseIDToken(tokenString string) (*corejwt.IDTokenClaims, e
 		return nil, errors.New("invalid token")
 	}
 	parsed := token.Claims.(*idTokenClaims)
+	if parsed.Issuer != j.Issuer {
+		return nil, errors.New("invalid issuer")
+	}
+	if parsed.TokenUse != tokenUseID {
+		return nil, errors.New("not an ID token")
+	}
 	out := &corejwt.IDTokenClaims{
 		Subject:       parsed.Subject,
 		Email:         parsed.Email,
