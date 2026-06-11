@@ -75,10 +75,30 @@ func (r *MongoUserRepository) findOne(ctx context.Context, filter bson.D) (*enti
 func (r *MongoUserRepository) Save(ctx context.Context, user *entity.User) error {
 	doc := toDoc(user)
 	filter := bson.D{{Key: "_id", Value: doc.ID}}
-	update := bson.D{{Key: "$set", Value: doc}}
 	opts := options.Update().SetUpsert(true)
-	_, err := r.col.UpdateOne(ctx, filter, update, opts)
+	_, err := r.col.UpdateOne(ctx, filter, buildUserUpdate(doc), opts)
 	return err
+}
+
+// buildUserUpdate returns $set for the document plus $unset for nil pointer
+// fields: their bson omitempty tag drops them from $set, which would leave
+// stale values (e.g. a consumed password-reset token) in Mongo.
+func buildUserUpdate(doc *userDoc) bson.D {
+	update := bson.D{{Key: "$set", Value: doc}}
+	unset := bson.D{}
+	if doc.PasswordResetTokenHash == nil {
+		unset = append(unset, bson.E{Key: "password_reset_token_hash", Value: ""})
+	}
+	if doc.PasswordResetExpiresAt == nil {
+		unset = append(unset, bson.E{Key: "password_reset_expires_at", Value: ""})
+	}
+	if doc.SessionsInvalidatedAt == nil {
+		unset = append(unset, bson.E{Key: "sessions_invalidated_at", Value: ""})
+	}
+	if len(unset) > 0 {
+		update = append(update, bson.E{Key: "$unset", Value: unset})
+	}
+	return update
 }
 
 func (r *MongoUserRepository) UpdateByPasswordResetTokenHash(ctx context.Context, tokenHash string, update func(*entity.User) error) error {
@@ -94,7 +114,7 @@ func (r *MongoUserRepository) UpdateByPasswordResetTokenHash(ctx context.Context
 		{Key: "_id", Value: string(user.ID)},
 		{Key: "password_reset_token_hash", Value: tokenHash},
 	}
-	result, err := r.col.UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: toDoc(user)}})
+	result, err := r.col.UpdateOne(ctx, filter, buildUserUpdate(toDoc(user)))
 	if err != nil {
 		return err
 	}
