@@ -20,6 +20,9 @@ func main() {
 				Interface("panic error", err).
 				Str("stack", string(debug.Stack())).
 				Msg("Executing main failed")
+			// A failed boot must report failure: exiting 0 here would make
+			// orchestrators treat a crashed startup as a clean shutdown.
+			os.Exit(1)
 		}
 	}()
 

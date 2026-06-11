@@ -2,6 +2,7 @@ package dependencies
 
 import (
 	"context"
+	"fmt"
 	"sc/cmd/auth/config"
 	corecache "sc/core/cache"
 	"sc/core/uow"
@@ -34,14 +35,12 @@ func NewDeps(cfg *config.Settings) Deps {
 	}
 	deps.JWTService = jwtSvc
 
-	deps.Cache = cache.NewMemoryCache()
-	if cfg.Redis.Addr != "" {
-		if r, err := cache.NewRedisCache(cfg.Redis); err != nil {
-			log.Warn().Err(err).Str("addr", cfg.Redis.Addr).Msg("Redis unavailable, falling back to memory cache")
-		} else {
-			deps.Cache = r
-		}
+	c, err := selectCache(cfg.Redis.Addr, func() (corecache.Cache, error) { return cache.NewRedisCache(cfg.Redis) })
+	if err != nil {
+		log.Err(err).Msg("Failed to initialize cache")
+		panic(err)
 	}
+	deps.Cache = c
 
 	if cfg.SMTP.Host != "" {
 		deps.SMTPClient = infrasmtp.NewClient(cfg.SMTP.Addr(), cfg.SMTP.From)
@@ -74,6 +73,21 @@ func NewDeps(cfg *config.Settings) Deps {
 	}
 
 	return deps
+}
+
+// selectCache fails closed: a deployment that configured Redis must not
+// silently run on per-replica memory — that would split the rate limiter,
+// the JTI blacklist, and auth sessions across replicas. Memory cache is the
+// default only when Redis is not configured at all.
+func selectCache(redisAddr string, newRedis func() (corecache.Cache, error)) (corecache.Cache, error) {
+	if redisAddr == "" {
+		return cache.NewMemoryCache(), nil
+	}
+	r, err := newRedis()
+	if err != nil {
+		return nil, fmt.Errorf("redis configured at %s but unreachable: %w", redisAddr, err)
+	}
+	return r, nil
 }
 
 func (d Deps) Cleanup(ctx context.Context) {
