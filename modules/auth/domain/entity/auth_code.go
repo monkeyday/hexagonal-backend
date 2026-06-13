@@ -1,13 +1,13 @@
 package entity
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"time"
 
+	"sc/core/random"
 	"sc/core/validator"
 )
 
@@ -58,11 +58,7 @@ func NewAuthCode(args AuthCodeArgs) (*AuthCode, error) {
 }
 
 func generateCode() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return random.Token()
 }
 
 func (a *AuthCode) IsExpired() bool {

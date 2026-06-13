@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -12,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sc/core/random"
 	"strconv"
 	"strings"
 	"sync"
@@ -715,11 +715,7 @@ func formPage(title, bodyHTML string) string {
 }
 
 func generateRandom(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return random.Token()
 }
 
 func s256Challenge(verifier string) string {

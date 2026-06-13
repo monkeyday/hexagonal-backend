@@ -1,7 +1,6 @@
 package jwt
 
 import (
-	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"errors"
@@ -9,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	corejwt "sc/core/jwt"
+	"sc/core/random"
 	"slices"
 	"sync"
 	"time"
@@ -86,11 +86,11 @@ func (j *JWTService) GenAccessToken(userID, scope string, expireSecs int) (strin
 }
 
 func (j *JWTService) GenRefreshToken(userID string) (string, error) {
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
+	tok, err := random.Token()
+	if err != nil {
 		return "", fmt.Errorf("gen random bytes failed for user %s: %w", userID, err)
 	}
-	return base64.RawURLEncoding.EncodeToString(tokenBytes), nil
+	return tok, nil
 }
 
 func (j *JWTService) GenIDToken(userID, clientID, email, nonce string, emailVerified bool, expireSecs int) (string, error) {

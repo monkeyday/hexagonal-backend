@@ -70,7 +70,8 @@ func (ro *Router) tokenHandlers() []gin.HandlerFunc {
 }
 
 func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
-	auth := middleware.Authenticate(ro.jwtSvc, ro.cache)
+	rev := newRevocationChecker(ro.cache)
+	auth := middleware.Authenticate(ro.jwtSvc, rev)
 	r.GET("/userinfo", auth, webHandler.Handle[query.GetProfileQuery](ro.module))
 	r.GET("/protocol/openid-connect/userinfo", auth, webHandler.Handle[query.GetProfileQuery](ro.module))
 
@@ -80,7 +81,7 @@ func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
 	// revoke accepts bearer OR client credentials (RFC 7009); introspect
 	// requires an authenticated confidential client (RFC 7662 §2.1) — a bearer
 	// token alone would let any user introspect arbitrary presented tokens.
-	optionalAuth := middleware.AuthenticateOptional(ro.jwtSvc, ro.cache)
+	optionalAuth := middleware.AuthenticateOptional(ro.jwtSvc, rev)
 	oidc.POST("/revoke", optionalAuth, middleware.ExtractClientCredentials(), webHandler.Handle[command.RevokeTokenCommand](ro.module))
 	oidc.POST("/introspect", middleware.ExtractClientCredentials(), webHandler.Handle[query.IntrospectTokenQuery](ro.module))
 	oidc.Use(auth)
@@ -89,7 +90,7 @@ func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
 
 func (ro *Router) registerV3Routes(r *gin.Engine) {
 	apiV3 := r.Group("/api/v3")
-	apiV3.Use(middleware.Authenticate(ro.jwtSvc, ro.cache))
+	apiV3.Use(middleware.Authenticate(ro.jwtSvc, newRevocationChecker(ro.cache)))
 	apiV3.POST("/update-profile", webHandler.Handle[command.UpdateProfileCommand](ro.module))
 }
 

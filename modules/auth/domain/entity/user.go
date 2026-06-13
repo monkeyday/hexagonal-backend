@@ -1,9 +1,8 @@
 package entity
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
+	"sc/core/random"
 	"time"
 	"unicode"
 
@@ -194,11 +193,7 @@ func (u *User) SetPassword(str string) error {
 }
 
 func GeneratePasswordResetToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return random.Token()
 }
 
 func hashPassword(password string) string {

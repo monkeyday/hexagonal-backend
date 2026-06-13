@@ -23,45 +23,25 @@ func (m *mockJwtService) ParseJWT(_ string) (*corejwt.Claims, error) {
 	return m.claims, m.parseErr
 }
 
-// mockCache implements corecache.ReadErrorCache for auth middleware tests.
-type mockCache struct {
-	items     map[string]any
-	getErrErr error // if set, GetErr returns this error
+// mockRevocationChecker implements RevocationChecker for auth middleware tests.
+type mockRevocationChecker struct {
+	revoked map[string]bool
+	err     error // if set, IsRevoked returns this error
 }
 
-func newMockCache(revokedJTIs ...string) *mockCache {
-	m := &mockCache{items: make(map[string]any)}
+func newMockRevocationChecker(revokedJTIs ...string) *mockRevocationChecker {
+	m := &mockRevocationChecker{revoked: make(map[string]bool)}
 	for _, jti := range revokedJTIs {
-		m.items["blacklist:"+jti] = true
+		m.revoked[jti] = true
 	}
 	return m
 }
 
-func (m *mockCache) Set(_ context.Context, key string, value any, _ *time.Duration) error {
-	m.items[key] = value
-	return nil
-}
-func (m *mockCache) Get(_ context.Context, key string, _ any) bool {
-	_, ok := m.items[key]
-	return ok
-}
-func (m *mockCache) GetErr(_ context.Context, key string, _ any) (bool, error) {
-	if m.getErrErr != nil {
-		return false, m.getErrErr
+func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
 	}
-	_, ok := m.items[key]
-	return ok, nil
-}
-func (m *mockCache) GetAndDelete(_ context.Context, key string, _ any) bool {
-	_, ok := m.items[key]
-	if ok {
-		delete(m.items, key)
-	}
-	return ok
-}
-func (m *mockCache) Delete(_ context.Context, key string) { delete(m.items, key) }
-func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (int64, error) {
-	return 0, nil
+	return m.revoked[jti], nil
 }
 
 func newExtractTokenRouter() *gin.Engine {
@@ -144,10 +124,10 @@ func TestExtractAccessToken(t *testing.T) {
 	}
 }
 
-func newAuthRouter(svc TokenParser, c *mockCache) *gin.Engine {
+func newAuthRouter(svc TokenParser, rev *mockRevocationChecker) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/protected", Authenticate(svc, c), func(c *gin.Context) {
+	r.GET("/protected", Authenticate(svc, rev), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"user_id":      c.GetString(UserIdKey),
 			"access_token": c.GetString(TokenKey),
@@ -171,7 +151,7 @@ func TestAuthenticate(t *testing.T) {
 		name        string
 		authHeader  string
 		svc         *mockJwtService
-		cache       *mockCache
+		rev         *mockRevocationChecker
 		wantStatus  int
 		wantErrCode coreerror.ErrCode
 		wantUserID  string
@@ -180,7 +160,7 @@ func TestAuthenticate(t *testing.T) {
 			name:       "valid token — sets context and passes through",
 			authHeader: "Bearer valid-token",
 			svc:        &mockJwtService{claims: validClaims},
-			cache:      newMockCache(),
+			rev:        newMockRevocationChecker(),
 			wantStatus: http.StatusOK,
 			wantUserID: "user-42",
 		},
@@ -188,7 +168,7 @@ func TestAuthenticate(t *testing.T) {
 			name:       "lowercase bearer — authenticates",
 			authHeader: "bearer valid-token",
 			svc:        &mockJwtService{claims: validClaims},
-			cache:      newMockCache(),
+			rev:        newMockRevocationChecker(),
 			wantStatus: http.StatusOK,
 			wantUserID: "user-42",
 		},
@@ -196,7 +176,7 @@ func TestAuthenticate(t *testing.T) {
 			name:       "uppercase BEARER — authenticates",
 			authHeader: "BEARER valid-token",
 			svc:        &mockJwtService{claims: validClaims},
-			cache:      newMockCache(),
+			rev:        newMockRevocationChecker(),
 			wantStatus: http.StatusOK,
 			wantUserID: "user-42",
 		},
@@ -204,7 +184,7 @@ func TestAuthenticate(t *testing.T) {
 			name:       "extra whitespace after scheme — token trimmed and authenticates",
 			authHeader: "Bearer   valid-token",
 			svc:        &mockJwtService{claims: validClaims},
-			cache:      newMockCache(),
+			rev:        newMockRevocationChecker(),
 			wantStatus: http.StatusOK,
 			wantUserID: "user-42",
 		},
@@ -212,7 +192,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "missing Authorization header — 401",
 			authHeader:  "",
 			svc:         &mockJwtService{claims: validClaims},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -220,7 +200,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "header too short (no token after Bearer) — 401",
 			authHeader:  "Bearer ",
 			svc:         &mockJwtService{claims: validClaims},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -228,7 +208,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "wrong scheme (Basic) — ParseJWT rejects non-JWT — 401",
 			authHeader:  "Basic dXNlcjpwYXNz",
 			svc:         &mockJwtService{parseErr: errors.New("token contains an invalid number of segments")},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -236,7 +216,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "ParseJWT fails — 401",
 			authHeader:  "Bearer bad-token",
 			svc:         &mockJwtService{parseErr: errors.New("signature invalid")},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -244,7 +224,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "ParseJWT returns nil claims — 401",
 			authHeader:  "Bearer nil-claims",
 			svc:         &mockJwtService{claims: nil},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -252,7 +232,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "token without jti — rejected, cannot be blacklist-checked — 401",
 			authHeader:  "Bearer no-jti-token",
 			svc:         &mockJwtService{claims: noJTIClaims},
-			cache:       newMockCache(),
+			rev:         newMockRevocationChecker(),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -260,7 +240,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "revoked JTI — 401",
 			authHeader:  "Bearer revoked-token",
 			svc:         &mockJwtService{claims: revokedClaims},
-			cache:       newMockCache("revoked-jti"),
+			rev:         newMockRevocationChecker("revoked-jti"),
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -268,7 +248,7 @@ func TestAuthenticate(t *testing.T) {
 			name:        "cache unavailable during blacklist check — fail closed 401",
 			authHeader:  "Bearer valid-token",
 			svc:         &mockJwtService{claims: revokedClaims},
-			cache:       &mockCache{items: make(map[string]any), getErrErr: errors.New("redis unavailable")},
+			rev:         &mockRevocationChecker{err: errors.New("redis unavailable")},
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
@@ -276,7 +256,7 @@ func TestAuthenticate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newAuthRouter(tc.svc, tc.cache)
+			r := newAuthRouter(tc.svc, tc.rev)
 			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)

@@ -1,13 +1,12 @@
 package entity
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"net/url"
 	"strings"
 	"time"
 
+	"sc/core/random"
 	corevalidator "sc/core/validator"
 )
 
@@ -92,11 +91,7 @@ func (s *AuthorizeRequest) BuildRedirectURI(code string) string {
 }
 
 func generateCSRFToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return random.Token()
 }
 
 func (s *AuthorizeRequest) Validate() error {

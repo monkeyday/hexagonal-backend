@@ -1,20 +1,26 @@
 package middleware
 
 import (
-	"fmt"
+	"context"
 	"strings"
 
-	corecache "sc/core/cache"
 	coreerror "sc/core/error"
 	corejwt "sc/core/jwt"
 	"sc/handler/web/responder"
-	"sc/modules/auth/application/define"
 
 	"github.com/gin-gonic/gin"
 )
 
 type TokenParser interface {
 	ParseJWT(tokenString string) (*corejwt.Claims, error)
+}
+
+// RevocationChecker reports whether an access token (identified by its jti)
+// has been revoked. The middleware depends on this narrow port instead of the
+// auth module's cache-key convention, keeping the delivery layer free of
+// module-specific knowledge.
+type RevocationChecker interface {
+	IsRevoked(ctx context.Context, jti string) (bool, error)
 }
 
 const (
@@ -51,9 +57,9 @@ func ExtractAccessToken() gin.HandlerFunc {
 	}
 }
 
-func Authenticate(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
+func Authenticate(svc TokenParser, rev RevocationChecker) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		claims, token, ok := verifyBearer(ctx, svc, c)
+		claims, token, ok := verifyBearer(ctx, svc, rev)
 		if !ok {
 			ctx.Header(wwwAuthenticate, wwwAuthenticateBearer)
 			res := responder.NewHTTPResponder(ctx)
@@ -70,9 +76,9 @@ func Authenticate(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
 // presented but never rejects the request. For endpoints that accept either
 // a bearer token or client credentials (revoke/introspect per RFC 7009/7662);
 // the use case enforces that at least one of them authenticated.
-func AuthenticateOptional(svc TokenParser, c corecache.ReadErrorCache) gin.HandlerFunc {
+func AuthenticateOptional(svc TokenParser, rev RevocationChecker) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		if claims, token, ok := verifyBearer(ctx, svc, c); ok {
+		if claims, token, ok := verifyBearer(ctx, svc, rev); ok {
 			setBearerIdentity(ctx, claims, token)
 		}
 		ctx.Next()
@@ -81,7 +87,7 @@ func AuthenticateOptional(svc TokenParser, c corecache.ReadErrorCache) gin.Handl
 
 // verifyBearer validates the Authorization bearer token: signature/claims via
 // the parser, a mandatory jti, and a fail-closed revocation-blacklist check.
-func verifyBearer(ctx *gin.Context, svc TokenParser, c corecache.ReadErrorCache) (*corejwt.Claims, string, bool) {
+func verifyBearer(ctx *gin.Context, svc TokenParser, rev RevocationChecker) (*corejwt.Claims, string, bool) {
 	accessToken, ok := extractBearerToken(ctx.GetHeader(authorizationHeader))
 	if !ok {
 		return nil, "", false
@@ -95,8 +101,8 @@ func verifyBearer(ctx *gin.Context, svc TokenParser, c corecache.ReadErrorCache)
 	if claims.ID == "" {
 		return nil, "", false
 	}
-	if c != nil {
-		revoked, err := c.GetErr(ctx.Request.Context(), fmt.Sprintf(define.BlacklistCacheKey, claims.ID), nil)
+	if rev != nil {
+		revoked, err := rev.IsRevoked(ctx.Request.Context(), claims.ID)
 		if err != nil || revoked {
 			return nil, "", false
 		}
