@@ -74,6 +74,8 @@ jobs:
           FILE_DIR=$GITHUB_WORKSPACE/tmp
           USER_FILE_PATH=user.json
           OAUTH_CLIENT_ID=my_client
+          OAUTH_CLIENT_AUTH_METHOD=client_secret_basic
+          OAUTH_CLIENT_SECRET=super-secret-e2e-client-secret
           OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
           METRICS_ADDR=127.0.0.1:9878

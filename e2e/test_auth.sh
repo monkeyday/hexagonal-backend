@@ -3,6 +3,7 @@ set -uo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:9876}"
 CLIENT_ID="my_client"
+CLIENT_SECRET="${CLIENT_SECRET:-super-secret-e2e-client-secret}"
 REDIRECT_URI="http://localhost:3000/callback"
 POST_LOGOUT_URI="http://localhost:3000"
 EMAIL="test_$(date +%s)_$$@example.com"
@@ -249,6 +250,7 @@ fi
 section "OIDC code flow — exchange code"
 if [ -n "$CODE" ]; then
   split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -u "$CLIENT_ID:$CLIENT_SECRET" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=authorization_code&code=$CODE&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&code_verifier=$CODE_VERIFIER")"
   check_status "POST /token (exchange code)" "200" "$STATUS"
@@ -285,6 +287,7 @@ section "Refresh token"
 if [ -n "$REFRESH_TOKEN" ]; then
   OLD_RT="$REFRESH_TOKEN"
   split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -u "$CLIENT_ID:$CLIENT_SECRET" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=refresh_token&client_id=$CLIENT_ID&refresh_token=$REFRESH_TOKEN")"
   check_status "POST /token (refresh)" "200" "$STATUS"
@@ -326,7 +329,7 @@ check_json   "profile response" "$BODY"
 
 section "Introspect (POST /oidc/introspect)"
 split_resp "$(do_req "$BASE_URL/oidc/introspect" -X POST \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "token=$ACCESS_TOKEN&token_type_hint=access_token")"
 check_status "POST /oidc/introspect" "200" "$STATUS"
