@@ -47,7 +47,7 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 
 	user, err := uc.userRepo.FindByEmail(ctx, q.Email)
 	if err != nil || user == nil {
-		log.Warn().Str("email", q.Email).Msg("user not found")
+		log.Warn().Msg("password grant: user not found")
 		return nil, autherrors.NewErrInvalidEmailOrPassword()
 	}
 
@@ -59,7 +59,7 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 	}
 
 	if err := user.ValidatePassword(q.Password); err != nil {
-		log.Warn().Str("email", q.Email).Msg("password not matched")
+		log.Warn().Str("user_id", string(user.ID)).Msg("password not matched")
 		user.RecordFailedLogin()
 		if saveErr := uc.userRepo.Save(ctx, user); saveErr != nil {
 			log.Warn().Err(saveErr).Str("user_id", string(user.ID)).Msg("failed to persist account login failure")

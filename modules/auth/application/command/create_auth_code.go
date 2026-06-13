@@ -96,7 +96,7 @@ func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session 
 	}
 
 	if user == nil || user.ValidatePassword(password) != nil {
-		log.Warn().Str("email", email).Msg("sign-in failed: invalid credentials")
+		log.Warn().Msg("sign-in failed: invalid credentials")
 		uc.recordAccountFailure(ctx, user)
 
 		sessionKey := fmt.Sprintf(define.AuthorizeRequestCacheKey, session.ID)

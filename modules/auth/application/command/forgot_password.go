@@ -51,7 +51,7 @@ func (uc *ForgotPasswordUseCase) Execute(ctx context.Context, cmd any) (any, err
 
 	if uc.emailSender != nil {
 		if err := uc.emailSender.SendPasswordResetEmail(ctx, updated.Email, token); err != nil {
-			log.Error().Err(err).Str("email", updated.Email).Msg("forgot_password: failed to send reset email")
+			log.Error().Err(err).Str("user_id", string(updated.ID)).Msg("forgot_password: failed to send reset email")
 		}
 	}
 

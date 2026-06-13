@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	infrasmtp "sc/infrastructure/smtp"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -14,8 +15,18 @@ type LogEmailSender struct{}
 func NewLogEmailSender() *LogEmailSender { return &LogEmailSender{} }
 
 func (s *LogEmailSender) SendPasswordResetEmail(_ context.Context, toEmail, rawToken string) error {
-	log.Info().Str("to", toEmail).Str("token_hint", tokenHint(rawToken)).Msg("password reset email (stub)")
+	log.Info().Str("to", maskEmail(toEmail)).Str("token_hint", tokenHint(rawToken)).Msg("password reset email (stub)")
 	return nil
+}
+
+// maskEmail reduces an address to a non-identifying hint for dev logs,
+// e.g. "jane@example.com" -> "j***@example.com".
+func maskEmail(email string) string {
+	at := strings.IndexByte(email, '@')
+	if at <= 0 {
+		return "***"
+	}
+	return email[:1] + "***" + email[at:]
 }
 
 func tokenHint(token string) string {
