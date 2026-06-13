@@ -28,6 +28,7 @@ type User struct {
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 	ID                     UserID
+	TenantID               TenantID
 	Username               string
 	Nickname               string
 	Password               string // bcrypt hash
@@ -41,6 +42,7 @@ type User struct {
 }
 
 type UserArgs struct {
+	TenantID      TenantID
 	Username      string
 	Nickname      string
 	Password      string
@@ -52,8 +54,13 @@ func NewUser(args UserArgs) (*User, error) {
 	if err := validatePassword(args.Password); err != nil {
 		return nil, err
 	}
+	tenantID := args.TenantID
+	if tenantID == "" {
+		tenantID = DefaultTenantID
+	}
 	return &User{
 		ID:            NewUserID(),
+		TenantID:      tenantID,
 		Username:      args.Username,
 		Nickname:      args.Nickname,
 		Password:      hashPassword(args.Password),

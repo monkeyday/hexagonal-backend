@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	crypto "sc/core/crypto"
 	coreerror "sc/core/error"
 	mongorepo "sc/infrastructure/repository/mongo"
 	"sc/modules/auth/domain/entity"
@@ -20,28 +21,32 @@ var _ port.UserRepository = (*MongoUserRepository)(nil)
 const usersCollection = "users"
 
 type MongoUserRepository struct {
-	col *mongo.Collection
+	col   *mongo.Collection
+	codec *userCodec
 }
 
-func NewMongoUserRepository(client *mongorepo.MongoClient) (*MongoUserRepository, error) {
+func NewMongoUserRepository(client *mongorepo.MongoClient, c *crypto.Cipher) (*MongoUserRepository, error) {
 	col := client.DB.Collection(usersCollection)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	_, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
+		Keys: bson.D{
+			{Key: "tenant_id", Value: 1},
+			{Key: "email_blind_index", Value: 1},
+		},
 		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user indexes: %w", err)
 	}
 
-	return &MongoUserRepository{col: col}, nil
+	return &MongoUserRepository{col: col, codec: newUserCodec(c)}, nil
 }
 
 func (r *MongoUserRepository) CreateUser(ctx context.Context, user *entity.User) error {
-	_, err := r.col.InsertOne(ctx, toDoc(user))
+	_, err := r.col.InsertOne(ctx, r.codec.toDoc(user))
 	if mongo.IsDuplicateKeyError(err) {
 		return coreerror.ErrConflict
 	}
@@ -49,7 +54,11 @@ func (r *MongoUserRepository) CreateUser(ctx context.Context, user *entity.User)
 }
 
 func (r *MongoUserRepository) FindByEmail(ctx context.Context, email string) (*entity.User, error) {
-	return r.findOne(ctx, bson.D{{Key: "email", Value: email}})
+	bi := r.codec.cipher.BlindIndex(email)
+	return r.findOne(ctx, bson.D{
+		{Key: "tenant_id", Value: string(entity.DefaultTenantID)},
+		{Key: "email_blind_index", Value: bi},
+	})
 }
 
 func (r *MongoUserRepository) FindByID(ctx context.Context, id entity.UserID) (*entity.User, error) {
@@ -69,11 +78,11 @@ func (r *MongoUserRepository) findOne(ctx context.Context, filter bson.D) (*enti
 	if err != nil {
 		return nil, err
 	}
-	return toEntity(&doc)
+	return r.codec.toEntity(&doc)
 }
 
 func (r *MongoUserRepository) Save(ctx context.Context, user *entity.User) error {
-	doc := toDoc(user)
+	doc := r.codec.toDoc(user)
 	filter := bson.D{{Key: "_id", Value: doc.ID}}
 	opts := options.Update().SetUpsert(true)
 	_, err := r.col.UpdateOne(ctx, filter, buildUserUpdate(doc), opts)
@@ -117,7 +126,7 @@ func (r *MongoUserRepository) UpdateByPasswordResetTokenHash(ctx context.Context
 		{Key: "_id", Value: string(user.ID)},
 		{Key: "password_reset_token_hash", Value: tokenHash},
 	}
-	result, err := r.col.UpdateOne(ctx, filter, buildUserUpdate(toDoc(user)))
+	result, err := r.col.UpdateOne(ctx, filter, buildUserUpdate(r.codec.toDoc(user)))
 	if err != nil {
 		return err
 	}

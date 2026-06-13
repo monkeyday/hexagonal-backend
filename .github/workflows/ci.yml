@@ -79,6 +79,8 @@ jobs:
           OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
           METRICS_ADDR=127.0.0.1:9878
+          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
           EOF
 
       - name: Build server
@@ -129,6 +131,8 @@ jobs:
           OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
           OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
           METRICS_ADDR=127.0.0.1:9878
+          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
           EOF
 
       - name: Build server

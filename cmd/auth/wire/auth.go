@@ -20,13 +20,13 @@ func Auth(cfg *config.Settings, deps dependencies.Deps) *auth.Module {
 func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependencies {
 	var userRepo port.UserRepository
 	if cfg.RepositoryType == "mongo" {
-		r, err := adapterout.NewMongoUserRepository(deps.MongoClient)
+		r, err := adapterout.NewMongoUserRepository(deps.MongoClient, deps.EmailCipher)
 		if err != nil {
 			panic(fmt.Sprintf("failed to initialize user repository: %v", err))
 		}
 		userRepo = r
 	} else {
-		r, err := adapterout.NewUserRepository(deps.FileStore, nil)
+		r, err := adapterout.NewUserRepository(deps.FileStore, nil, deps.EmailCipher)
 		if err != nil {
 			panic(fmt.Sprintf("failed to initialize user repository: %v", err))
 		}

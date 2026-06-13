@@ -30,6 +30,12 @@ type Settings struct {
 	OAuth          OAuthConfig
 	SMTP           infrasmtp.Config `validate:"-"` // validated contextually when SMTP_HOST is set
 	AppBaseURL     string           // base URL for password-reset links
+	Crypto         CryptoConfig
+}
+
+type CryptoConfig struct {
+	EmailEncryptionKey string // base64, decodes to 32 bytes (AES-256)
+	EmailBlindIndexKey string // base64 HMAC key
 }
 
 type FileRepositoryConfig struct {
@@ -110,6 +116,10 @@ func Load(entryPath string) *Settings {
 				From: os.Getenv("SMTP_FROM"),
 			},
 			AppBaseURL: os.Getenv("APP_BASE_URL"),
+			Crypto: CryptoConfig{
+				EmailEncryptionKey: os.Getenv("EMAIL_ENCRYPTION_KEY"),
+				EmailBlindIndexKey: os.Getenv("EMAIL_BLIND_INDEX_KEY"),
+			},
 		}
 
 		if err := validator.ValidateStruct(cfg); err != nil {

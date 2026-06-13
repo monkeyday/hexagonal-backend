@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sc/cmd/auth/config"
 	corecache "sc/core/cache"
+	crypto "sc/core/crypto"
 	"sc/core/uow"
 	"sc/infrastructure/cache"
 	"sc/infrastructure/jwt"
@@ -24,6 +25,7 @@ type Deps struct {
 	FileStore         *filerepo.FileStore
 	RefreshTokenStore *filerepo.FileStore
 	SMTPClient        *infrasmtp.Client
+	EmailCipher       *crypto.Cipher
 }
 
 func NewDeps(cfg *config.Settings) Deps {
@@ -45,6 +47,13 @@ func NewDeps(cfg *config.Settings) Deps {
 	if cfg.SMTP.Host != "" {
 		deps.SMTPClient = infrasmtp.NewClient(cfg.SMTP.Addr(), cfg.SMTP.From)
 	}
+
+	emailCipher, err := crypto.NewCipherFromBase64(cfg.Crypto.EmailEncryptionKey, cfg.Crypto.EmailBlindIndexKey)
+	if err != nil {
+		log.Err(err).Msg("Failed to initialize email cipher (set EMAIL_ENCRYPTION_KEY and EMAIL_BLIND_INDEX_KEY)")
+		panic(err)
+	}
+	deps.EmailCipher = emailCipher
 
 	switch cfg.RepositoryType {
 	case "mongo":

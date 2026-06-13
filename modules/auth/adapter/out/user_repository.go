@@ -2,10 +2,13 @@ package adapter
 
 import (
 	"context"
+	"fmt"
+	"time"
+
+	crypto "sc/core/crypto"
 	filerepo "sc/infrastructure/repository/file"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
-	"time"
 )
 
 var _ port.UserRepository = (*UserRepository)(nil)
@@ -14,10 +17,11 @@ type UserRepository struct {
 	repo *filerepo.FileRepository[entity.User, userDoc]
 }
 
-func NewUserRepository(store *filerepo.FileStore, seed map[string]*entity.User) (*UserRepository, error) {
+func NewUserRepository(store *filerepo.FileStore, seed map[string]*entity.User, c *crypto.Cipher) (*UserRepository, error) {
+	codec := newUserCodec(c)
 	repo, err := filerepo.New[entity.User, userDoc](
 		store, seed,
-		toDoc, toEntity,
+		codec.toDoc, codec.toEntity,
 		func(u *entity.User) string { return string(u.ID) },
 	)
 	if err != nil {
@@ -52,10 +56,12 @@ func (r *UserRepository) UpdateByPasswordResetTokenHash(_ context.Context, token
 
 type userDoc struct {
 	ID                     string     `json:"id"                       bson:"_id"`
+	TenantID               string     `json:"tenant_id"                bson:"tenant_id"`
 	Username               string     `json:"username"                 bson:"username"`
 	Nickname               string     `json:"nickname"                 bson:"nickname"`
 	Password               string     `json:"password"                 bson:"password"`
-	Email                  string     `json:"email"                    bson:"email"`
+	EmailCiphertext        string     `json:"email_ciphertext"         bson:"email_ciphertext"`
+	EmailBlindIndex        string     `json:"email_blind_index"        bson:"email_blind_index"`
 	EmailVerified          bool       `json:"email_verified"           bson:"email_verified"`
 	PasswordResetTokenHash *string    `json:"password_reset_token_hash,omitempty" bson:"password_reset_token_hash,omitempty"`
 	PasswordResetExpiresAt *time.Time `json:"password_reset_expires_at,omitempty" bson:"password_reset_expires_at,omitempty"`
@@ -66,13 +72,23 @@ type userDoc struct {
 	UpdatedAt              time.Time  `json:"updated_at"               bson:"updated_at"`
 }
 
-func toDoc(u *entity.User) *userDoc {
+type userCodec struct{ cipher *crypto.Cipher }
+
+func newUserCodec(c *crypto.Cipher) *userCodec { return &userCodec{cipher: c} }
+
+func (uc *userCodec) toDoc(u *entity.User) *userDoc {
+	ciphertext, err := uc.cipher.Encrypt(u.Email)
+	if err != nil {
+		panic(fmt.Sprintf("encrypt email: %v", err))
+	}
 	return &userDoc{
 		ID:                     string(u.ID),
+		TenantID:               string(u.TenantID),
 		Username:               u.Username,
 		Nickname:               u.Nickname,
 		Password:               u.Password,
-		Email:                  u.Email,
+		EmailCiphertext:        ciphertext,
+		EmailBlindIndex:        uc.cipher.BlindIndex(u.Email),
 		EmailVerified:          u.EmailVerified,
 		PasswordResetTokenHash: u.PasswordResetTokenHash,
 		PasswordResetExpiresAt: u.PasswordResetExpiresAt,
@@ -84,13 +100,22 @@ func toDoc(u *entity.User) *userDoc {
 	}
 }
 
-func toEntity(d *userDoc) (*entity.User, error) {
+func (uc *userCodec) toEntity(d *userDoc) (*entity.User, error) {
+	email, err := uc.cipher.Decrypt(d.EmailCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt email for user %s: %w", d.ID, err)
+	}
+	tenantID := entity.TenantID(d.TenantID)
+	if tenantID == "" {
+		tenantID = entity.DefaultTenantID
+	}
 	return &entity.User{
 		ID:                     entity.UserID(d.ID),
+		TenantID:               tenantID,
 		Username:               d.Username,
 		Nickname:               d.Nickname,
 		Password:               d.Password,
-		Email:                  d.Email,
+		Email:                  email,
 		EmailVerified:          d.EmailVerified,
 		PasswordResetTokenHash: d.PasswordResetTokenHash,
 		PasswordResetExpiresAt: d.PasswordResetExpiresAt,
