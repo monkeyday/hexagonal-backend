@@ -47,6 +47,14 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    services:
+      # Sidecar SMTP sink so the forgot-password flow can be asserted end-to-end:
+      # the IdP sends to :1025, the test reads the reset link back via the API on :8025.
+      mailpit:
+        image: axllent/mailpit:v1.30
+        ports:
+          - 1025:1025
+          - 8025:8025
     steps:
       - uses: actions/checkout@v4
       - name: Ensure node binary (act only)
@@ -81,10 +89,22 @@ jobs:
           METRICS_ADDR=127.0.0.1:9878
           EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
           EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
+          SMTP_HOST=localhost
+          SMTP_PORT=1025
+          SMTP_FROM=noreply@auth.local
+          APP_BASE_URL=http://localhost:3000
           EOF
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth
+
+      - name: Wait for Mailpit
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8025/api/v1/info >/dev/null && { echo "Mailpit ready"; exit 0; }
+            sleep 1
+          done
+          echo "Mailpit did not become ready" >&2; exit 1
 
       - name: Run e2e tests
         env:

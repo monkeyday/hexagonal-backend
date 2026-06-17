@@ -364,6 +364,66 @@ check_status "GET /oidc/logout → 302" "302" "$LOGOUT_STATUS"
 
 fi
 
+# ── Forgot password & reset (requires Mailpit) ────────────────────────────────
+# Drives the real email round-trip: request a reset, read the link back out of
+# Mailpit, reset the password, then prove server-side that the OLD password no
+# longer works and the NEW one does. Skips (without failing) when Mailpit is not
+# reachable, so the suite still runs locally without an SMTP sink.
+
+section "Forgot password & reset"
+MAILPIT_URL="${MAILPIT_URL:-http://127.0.0.1:8025}"
+RESET_TOKEN=""
+NEW_PASSWORD="Reset!345"
+if ! curl -sf --max-time 2 "$MAILPIT_URL/api/v1/info" >/dev/null 2>&1; then
+  info "Mailpit not reachable at $MAILPIT_URL — skipping (set SMTP_* + run Mailpit to enable)"
+else
+  # Clear the inbox so /message/latest is unambiguously our reset mail.
+  curl -s --max-time 5 -X DELETE "$MAILPIT_URL/api/v1/messages" >/dev/null 2>&1 || true
+
+  split_resp "$(do_req "$BASE_URL/forgot-password" -X POST \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "email=$EMAIL")"
+  check_status "POST /forgot-password (generic 200)" "200" "$STATUS"
+
+  for i in $(seq 1 15); do
+    LATEST=$(curl -sf --max-time 5 "$MAILPIT_URL/api/v1/message/latest" 2>/dev/null || true)
+    RESET_TOKEN=$(printf '%s' "$LATEST" | jq -r '.Text // ""' 2>/dev/null |
+      grep -oE 'reset-password\?token=[A-Za-z0-9._-]+' | head -n1 | sed 's/.*token=//')
+    [ -n "$RESET_TOKEN" ] && break
+    sleep 1
+  done
+  if [ -n "$RESET_TOKEN" ]; then
+    pass "reset email delivered to Mailpit (token extracted)"
+    info "reset token: [${#RESET_TOKEN} chars]"
+  else
+    fail "reset email not found in Mailpit"
+  fi
+
+  if [ -n "$RESET_TOKEN" ]; then
+    split_resp "$(do_req "$BASE_URL/reset-password" -X POST \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "token=$RESET_TOKEN&password=$NEW_PASSWORD")"
+    check_status "POST /reset-password" "200" "$STATUS"
+  fi
+
+  # Server-state cross-check — the assertion that can't pass on an echo.
+  split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&email=$EMAIL&password=$PASSWORD&expire_secs=3600")"
+  if [ "$STATUS" != "200" ]; then
+    pass "old password rejected after reset (HTTP $STATUS)"
+  else
+    fail "old password still works after reset"
+  fi
+
+  split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&email=$EMAIL&password=$NEW_PASSWORD&expire_secs=3600")"
+  check_status "POST /token (password) with new password" "200" "$STATUS"
+  check_json   "new-password token response" "$BODY"
+  check_field  "new-password token" "$BODY" "access_token"
+fi
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 section "Metrics"
