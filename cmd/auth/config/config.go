@@ -21,15 +21,15 @@ import (
 const envFile = ".env"
 
 type Settings struct {
-	Server         coreweb.Config          `validate:"required"`
-	JWT            infrajwt.Config         `validate:"required"`
-	RepositoryType string                  `validate:"omitempty,oneof=file mongo"`
-	FileRepository FileRepositoryConfig    `validate:"-"` // validated contextually when RepositoryType == "file"
-	Mongo          mongorepo.Config        `validate:"-"` // validated contextually when RepositoryType == "mongo"
-	Redis          infracache.RedisOptions // optional; used when REDIS_ADDR is set
+	Server         coreweb.Config        `validate:"required"`
+	JWT            infrajwt.Config       `validate:"required"`
+	RepositoryType string                `validate:"omitempty,oneof=file mongo"`
+	FileRepository *FileRepositoryConfig `validate:"required_if=RepositoryType file"`
+	Mongo          *mongorepo.Config     `validate:"required_if=RepositoryType mongo"`
+	Redis          infracache.RedisOptions
 	OAuth          OAuthConfig
-	SMTP           infrasmtp.Config `validate:"-"` // validated contextually when SMTP_HOST is set
-	AppBaseURL     string           // base URL for password-reset links
+	SMTP           *infrasmtp.Config
+	AppBaseURL     string `validate:"required_with=SMTP"` // password-reset link base
 	Crypto         CryptoConfig
 }
 
@@ -45,13 +45,14 @@ type FileRepositoryConfig struct {
 }
 
 type OAuthConfig struct {
-	Client                      ClientConfig
+	Clients                     []ClientConfig
 	PostLogoutRedirectAllowlist []string
 	ScopeAllowlist              []string
 }
 
-// ClientConfig declares the single registered OAuth client until a persistent
-// client registry lands. Parsed into an entity.Client at composition time.
+// ClientConfig declares one registered OAuth client. The first is parsed from
+// the OAUTH_CLIENT_* vars; additional clients use OAUTH_CLIENT_<n>_* (n>=2).
+// Each is parsed into an entity.Client at composition time.
 type ClientConfig struct {
 	ID            string
 	AuthMethod    string
@@ -87,33 +88,15 @@ func Load(entryPath string) *Settings {
 				Kid:            os.Getenv("JWT_KID"),
 			},
 			RepositoryType: os.Getenv("REPOSITORY_USED"),
-			FileRepository: FileRepositoryConfig{
-				Dir:                  os.Getenv("FILE_DIR"),
-				UserFileName:         os.Getenv("USER_FILE_PATH"),
-				RefreshTokenFileName: "refresh_tokens.json",
-			},
-			Mongo: mongorepo.Config{
-				Host:       os.Getenv("MONGO_HOST"),
-				Username:   os.Getenv("MONGO_USER"),
-				Password:   os.Getenv("MONGO_PASSWORD"),
-				AuthSource: os.Getenv("MONGO_AUTH_SOURCE"),
-				Database:   os.Getenv("MONGO_DATABASE"),
-				Direct:     true,
-			},
 			Redis: infracache.RedisOptions{
 				Addr:     os.Getenv("REDIS_ADDR"),
 				Password: os.Getenv("REDIS_PASSWORD"),
 				DB:       parseRedisDB(os.Getenv("REDIS_DB")),
 			},
 			OAuth: OAuthConfig{
-				Client:                      parseClientConfig(),
+				Clients:                     parseClientConfigs(),
 				PostLogoutRedirectAllowlist: parseCommaSeparated(os.Getenv("OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST")),
 				ScopeAllowlist:              parseScopeAllowlist(os.Getenv("OAUTH_SCOPE_ALLOWLIST")),
-			},
-			SMTP: infrasmtp.Config{
-				Host: os.Getenv("SMTP_HOST"),
-				Port: os.Getenv("SMTP_PORT"),
-				From: os.Getenv("SMTP_FROM"),
 			},
 			AppBaseURL: os.Getenv("APP_BASE_URL"),
 			Crypto: CryptoConfig{
@@ -122,30 +105,24 @@ func Load(entryPath string) *Settings {
 			},
 		}
 
+		switch cfg.RepositoryType {
+		case "mongo":
+			cfg.Mongo = parseMongoConfig()
+		default:
+			cfg.FileRepository = parseFileRepositoryConfig()
+		}
+
+		if host := os.Getenv("SMTP_HOST"); host != "" {
+			cfg.SMTP = &infrasmtp.Config{
+				Host: host,
+				Port: os.Getenv("SMTP_PORT"),
+				From: os.Getenv("SMTP_FROM"),
+			}
+		}
+
 		if err := validator.ValidateStruct(cfg); err != nil {
 			log.Err(err).Msg("Failed to validate configuration")
 			panic(err)
-		}
-
-		var repoErr error
-		if cfg.RepositoryType == "mongo" {
-			repoErr = validator.ValidateStruct(cfg.Mongo)
-		} else {
-			repoErr = validator.ValidateStruct(cfg.FileRepository)
-		}
-		if repoErr != nil {
-			log.Err(repoErr).Msg("Failed to validate configuration")
-			panic(repoErr)
-		}
-
-		if cfg.SMTP.Host != "" {
-			if err := validator.ValidateStruct(cfg.SMTP); err != nil {
-				log.Err(err).Msg("SMTP_HOST is set but SMTP configuration is incomplete")
-				panic(err)
-			}
-			if cfg.AppBaseURL == "" {
-				panic("APP_BASE_URL is required when SMTP_HOST is set")
-			}
 		}
 	})
 
@@ -175,7 +152,41 @@ var (
 	defaultClientAllowedGrants = []string{"authorization_code", "refresh_token", "password", "client_credentials"}
 )
 
-func parseClientConfig() ClientConfig {
+func parseFileRepositoryConfig() *FileRepositoryConfig {
+	return &FileRepositoryConfig{
+		Dir:                  os.Getenv("FILE_DIR"),
+		UserFileName:         os.Getenv("USER_FILE_PATH"),
+		RefreshTokenFileName: "refresh_tokens.json",
+	}
+}
+
+func parseMongoConfig() *mongorepo.Config {
+	return &mongorepo.Config{
+		Host:       os.Getenv("MONGO_HOST"),
+		Username:   os.Getenv("MONGO_USER"),
+		Password:   os.Getenv("MONGO_PASSWORD"),
+		AuthSource: os.Getenv("MONGO_AUTH_SOURCE"),
+		Database:   os.Getenv("MONGO_DATABASE"),
+		Direct:     true,
+	}
+}
+
+// parseClientConfigs reads the primary client from OAUTH_CLIENT_* and any
+// additional clients from OAUTH_CLIENT_<n>_* (n>=2), stopping at the first gap.
+func parseClientConfigs() []ClientConfig {
+	clients := []ClientConfig{parsePrimaryClientConfig()}
+	for n := 2; ; n++ {
+		prefix := "OAUTH_CLIENT_" + strconv.Itoa(n) + "_"
+		id := os.Getenv(prefix + "ID")
+		if id == "" {
+			break
+		}
+		clients = append(clients, parseClientConfigFields(prefix, id))
+	}
+	return clients
+}
+
+func parsePrimaryClientConfig() ClientConfig {
 	id := os.Getenv("OAUTH_CLIENT_ID")
 	if id == "" {
 		// Fail closed: never serve /authorize for a fictitious default client.
@@ -191,12 +202,17 @@ func parseClientConfig() ClientConfig {
 			AllowedGrants: defaultClientAllowedGrants,
 		}
 	}
+	return parseClientConfigFields("OAUTH_CLIENT_", id)
+}
 
-	authMethod := os.Getenv("OAUTH_CLIENT_AUTH_METHOD")
+// parseClientConfigFields reads a client's fields from the given env prefix,
+// applying the shared defaults for auth method and allowed grants.
+func parseClientConfigFields(prefix, id string) ClientConfig {
+	authMethod := os.Getenv(prefix + "AUTH_METHOD")
 	if authMethod == "" {
 		authMethod = defaultClientAuthMethod
 	}
-	grants := parseCommaSeparated(os.Getenv("OAUTH_CLIENT_ALLOWED_GRANTS"))
+	grants := parseCommaSeparated(os.Getenv(prefix + "ALLOWED_GRANTS"))
 	if len(grants) == 0 {
 		grants = defaultClientAllowedGrants
 	}
@@ -204,8 +220,8 @@ func parseClientConfig() ClientConfig {
 	return ClientConfig{
 		ID:            id,
 		AuthMethod:    authMethod,
-		Secret:        os.Getenv("OAUTH_CLIENT_SECRET"),
-		RedirectURIs:  parseCommaSeparated(os.Getenv("OAUTH_CLIENT_REDIRECT_URIS")),
+		Secret:        os.Getenv(prefix + "SECRET"),
+		RedirectURIs:  parseCommaSeparated(os.Getenv(prefix + "REDIRECT_URIS")),
 		AllowedGrants: grants,
 	}
 }

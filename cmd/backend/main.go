@@ -32,7 +32,7 @@ const (
 	UpdateProfileEndpoint  = AuthServerURL + "/api/v3/update-profile"
 	ForgotPasswordEndpoint = AuthServerURL + "/forgot-password"
 	ResetPasswordEndpoint  = AuthServerURL + "/reset-password"
-	ClientID               = "my_client"
+	ClientID               = "my_client2"
 	RedirectURI            = "http://" + ListenHost + "/callback"
 	Scope                  = "openid profile email"
 	sessionCookieName      = "session_id"
@@ -70,6 +70,15 @@ var (
 	// test harness; a real backend must scope this to a per-browser session.
 	pending pendingAuth
 )
+
+// httpClient talks to the auth server with keep-alives disabled. Reusing a
+// pooled connection the server has idly closed surfaces as io.EOF; retrying a
+// non-idempotent POST (token exchange, sign-up) on that EOF would re-run the
+// operation server-side — the first attempt already had its effect. Fresh
+// connections avoid the stale-reuse EOF entirely, so no retry is needed.
+var httpClient = &http.Client{
+	Transport: &http.Transport{DisableKeepAlives: true},
+}
 
 func main() {
 	http.HandleFunc("/", handleHome)
@@ -554,7 +563,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Printf("[!] Logout error: %v\n", err)
 		http.Error(w, "logout failed", http.StatusInternalServerError)
@@ -743,7 +752,7 @@ func extractNonce(idToken string) (string, error) {
 
 // postForm sends a POST with form data and no auth header.
 func postForm(endpoint string, data url.Values) ([]byte, int, error) {
-	resp, err := http.PostForm(endpoint, data)
+	resp, err := httpClient.PostForm(endpoint, data)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -753,20 +762,7 @@ func postForm(endpoint string, data url.Values) ([]byte, int, error) {
 }
 
 func postToken(data url.Values) (*tokenResponse, error) {
-	var (
-		resp *http.Response
-		err  error
-	)
-	for attempt := range 2 {
-		resp, err = http.PostForm(TokenEndpoint, data)
-		if err == nil {
-			break
-		}
-		if attempt == 0 && errors.Is(err, io.EOF) {
-			continue
-		}
-		return nil, err
-	}
+	resp, err := httpClient.PostForm(TokenEndpoint, data)
 	if err != nil {
 		return nil, err
 	}
@@ -799,7 +795,7 @@ func postWithBearer(endpoint, token string, data url.Values) ([]byte, int, error
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -825,24 +821,14 @@ func min(a, b int) int {
 }
 
 func fetchUserInfo(token string) (string, error) {
-	var (
-		resp *http.Response
-		err  error
-	)
-	for attempt := range 2 {
-		req, reqErr := http.NewRequest(http.MethodGet, UserinfoEndpoint, nil)
-		if reqErr != nil {
-			return "", reqErr
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
+	req, err := http.NewRequest(http.MethodGet, UserinfoEndpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, err = http.DefaultClient.Do(req)
-		if err == nil {
-			break
-		}
-		if attempt == 0 && errors.Is(err, io.EOF) {
-			continue
-		}
+	resp, err := httpClient.Do(req)
+	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()

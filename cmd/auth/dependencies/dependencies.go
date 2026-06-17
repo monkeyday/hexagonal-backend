@@ -44,7 +44,7 @@ func NewDeps(cfg *config.Settings) Deps {
 	}
 	deps.Cache = c
 
-	if cfg.SMTP.Host != "" {
+	if cfg.SMTP != nil {
 		deps.SMTPClient = infrasmtp.NewClient(cfg.SMTP.Addr(), cfg.SMTP.From)
 	}
 
@@ -57,7 +57,7 @@ func NewDeps(cfg *config.Settings) Deps {
 
 	switch cfg.RepositoryType {
 	case "mongo":
-		mongoClient, err := mongorepo.NewMongoClient(cfg.Mongo)
+		mongoClient, err := mongorepo.NewMongoClient(*cfg.Mongo)
 		if err != nil {
 			log.Err(err).Str("host", cfg.Mongo.Host).Str("database", cfg.Mongo.Database).Msg("Failed to connect to MongoDB")
 			panic(err)

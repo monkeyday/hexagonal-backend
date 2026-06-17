@@ -61,13 +61,21 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		UserRepo:                    userRepo,
 		RefreshTokenRepo:            refreshTokenRepo,
 		EmailSender:                 buildEmailSender(deps),
-		ClientRegistry:              buildClientRegistry(cfg.OAuth.Client),
+		ClientRegistry:              buildClientRegistry(cfg.OAuth.Clients),
 		PostLogoutRedirectAllowlist: cfg.OAuth.PostLogoutRedirectAllowlist,
 		ScopeAllowlist:              cfg.OAuth.ScopeAllowlist,
 	}
 }
 
-func buildClientRegistry(c config.ClientConfig) port.ClientRegistry {
+func buildClientRegistry(cs []config.ClientConfig) port.ClientRegistry {
+	clients := make([]*entity.Client, 0, len(cs))
+	for _, c := range cs {
+		clients = append(clients, buildClient(c))
+	}
+	return adapterout.NewConfigClientRegistry(clients...)
+}
+
+func buildClient(c config.ClientConfig) *entity.Client {
 	authMethod, err := entity.ParseClientAuthMethod(c.AuthMethod)
 	if err != nil {
 		panic(fmt.Sprintf("invalid client configuration: %v", err))
@@ -90,7 +98,7 @@ func buildClientRegistry(c config.ClientConfig) port.ClientRegistry {
 	if err != nil {
 		panic(fmt.Sprintf("invalid client configuration: %v", err))
 	}
-	return adapterout.NewConfigClientRegistry(client)
+	return client
 }
 
 func buildEmailSender(deps dependencies.Deps) port.EmailSender {
