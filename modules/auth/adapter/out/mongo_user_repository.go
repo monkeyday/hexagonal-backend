@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	crypto "sc/core/crypto"
+	"sc/core/crypto"
 	coreerror "sc/core/error"
 	mongorepo "sc/infrastructure/repository/mongo"
 	"sc/modules/auth/domain/entity"
@@ -53,10 +53,10 @@ func (r *MongoUserRepository) CreateUser(ctx context.Context, user *entity.User)
 	return err
 }
 
-func (r *MongoUserRepository) FindByEmail(ctx context.Context, email string) (*entity.User, error) {
+func (r *MongoUserRepository) FindByEmail(ctx context.Context, tenantID entity.TenantID, email string) (*entity.User, error) {
 	bi := r.codec.cipher.BlindIndex(email)
 	return r.findOne(ctx, bson.D{
-		{Key: "tenant_id", Value: string(entity.DefaultTenantID)},
+		{Key: "tenant_id", Value: string(tenantID)},
 		{Key: "email_blind_index", Value: bi},
 	})
 }

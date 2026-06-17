@@ -26,7 +26,7 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		}
 		userRepo = r
 	} else {
-		r, err := adapterout.NewUserRepository(deps.FileStore, nil, deps.EmailCipher)
+		r, err := adapterout.NewUserRepository(deps.FileStore, deps.EmailCipher)
 		if err != nil {
 			panic(fmt.Sprintf("failed to initialize user repository: %v", err))
 		}

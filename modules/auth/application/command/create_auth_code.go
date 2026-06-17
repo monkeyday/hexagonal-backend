@@ -82,7 +82,7 @@ func (uc *CreateAuthCodeUseCase) Execute(ctx context.Context, cmd any) (any, err
 }
 
 func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session *entity.AuthorizeRequest, email, password string) (entity.UserID, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, email)
+	user, err := uc.userRepo.FindByEmail(ctx, entity.DefaultTenantID, email)
 	if err != nil && !errors.Is(err, coreerror.ErrNotFound) {
 		return "", err
 	}

@@ -71,7 +71,6 @@ type FileRepository[T any, D any] struct {
 
 func New[T any, D any](
 	store *FileStore,
-	seed map[string]*T,
 	toDoc func(*T) *D,
 	toEntity func(*D) (*T, error),
 	getID func(*T) string,
@@ -79,17 +78,6 @@ func New[T any, D any](
 	loaded, err := loadFromFile[D](store.filePath)
 	if err != nil {
 		return nil, err
-	}
-
-	if len(loaded) == 0 && len(seed) > 0 {
-		docs := make(map[string]*D, len(seed))
-		for k, item := range seed {
-			docs[k] = toDoc(item)
-		}
-		if err := writeToFile(store.filePath, docs); err != nil {
-			return nil, err
-		}
-		loaded = docs
 	}
 
 	items := make(map[string]*T, len(loaded))

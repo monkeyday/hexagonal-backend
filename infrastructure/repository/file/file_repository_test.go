@@ -21,7 +21,7 @@ func newRecordRepo(t *testing.T) *FileRepository[record, record] {
 		t.Fatalf("NewFileStore: %v", err)
 	}
 	repo, err := New[record, record](
-		store, nil,
+		store,
 		func(r *record) *record { return r },
 		func(d *record) (*record, error) { return d, nil },
 		func(r *record) string { return r.ID },
@@ -134,7 +134,7 @@ func TestFileRepository_UpdateAll(t *testing.T) {
 	}
 	newRepo := func() *FileRepository[record, record] {
 		repo, err := New[record, record](
-			store, nil,
+			store,
 			func(r *record) *record { return r },
 			func(d *record) (*record, error) { return d, nil },
 			func(r *record) string { return r.ID },

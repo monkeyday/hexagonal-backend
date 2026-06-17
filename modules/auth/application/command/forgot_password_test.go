@@ -128,7 +128,7 @@ func TestForgotPasswordUseCase(t *testing.T) {
 			}
 
 			if tc.wantTokenStored {
-				user, _ := tc.repo.FindByEmail(ctx, tc.cmd.Email)
+				user, _ := tc.repo.FindByEmail(ctx, entity.DefaultTenantID, tc.cmd.Email)
 				if user == nil {
 					t.Fatal("user not found in repo")
 				}
@@ -166,7 +166,7 @@ func TestForgotPasswordUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		user, _ := repo.FindByEmail(ctx, "test@example.com")
+		user, _ := repo.FindByEmail(ctx, entity.DefaultTenantID, "test@example.com")
 		if user == nil {
 			t.Fatal("user not found")
 		}

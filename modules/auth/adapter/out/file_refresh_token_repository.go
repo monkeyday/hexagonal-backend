@@ -68,7 +68,7 @@ type FileRefreshTokenRepository struct {
 
 func NewFileRefreshTokenRepository(store *filerepo.FileStore) (*FileRefreshTokenRepository, error) {
 	repo, err := filerepo.New[entity.RefreshToken, refreshTokenDoc](
-		store, nil,
+		store,
 		rtToDoc, rtToEntity,
 		func(rt *entity.RefreshToken) string { return rt.ID },
 	)

@@ -45,7 +45,7 @@ func NewGetTokenUseCase(deps define.Dependencies) usecase.UseCase {
 func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) {
 	q := query.(*GetTokenQuery)
 
-	user, err := uc.userRepo.FindByEmail(ctx, q.Email)
+	user, err := uc.userRepo.FindByEmail(ctx, entity.DefaultTenantID, q.Email)
 	if err != nil || user == nil {
 		log.Warn().Msg("password grant: user not found")
 		return nil, autherrors.NewErrInvalidEmailOrPassword()

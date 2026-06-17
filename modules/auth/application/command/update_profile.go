@@ -26,8 +26,8 @@ func NewUpdateProfileUseCase(deps define.Dependencies) usecase.UseCase {
 	return &UpdateProfileUseCase{userRepo: deps.UserRepo}
 }
 
-func (uc *UpdateProfileUseCase) checkEmailAvailable(ctx context.Context, email string, excludeID entity.UserID) error {
-	userExists, err := uc.userRepo.FindByEmail(ctx, email)
+func (uc *UpdateProfileUseCase) checkEmailAvailable(ctx context.Context, tenantID entity.TenantID, email string, excludeID entity.UserID) error {
+	userExists, err := uc.userRepo.FindByEmail(ctx, tenantID, email)
 	if err != nil && !errors.Is(err, coreerror.ErrNotFound) {
 		return err
 	}
@@ -52,7 +52,7 @@ func (uc *UpdateProfileUseCase) Execute(ctx context.Context, cmd any) (any, erro
 	}
 
 	if c.Email != nil {
-		if err := uc.checkEmailAvailable(ctx, *c.Email, entity.UserID(c.UserID)); err != nil {
+		if err := uc.checkEmailAvailable(ctx, user.TenantID, *c.Email, entity.UserID(c.UserID)); err != nil {
 			return &define.UpdateProfileResponse{}, err
 		}
 	}

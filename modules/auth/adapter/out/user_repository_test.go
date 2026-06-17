@@ -221,7 +221,7 @@ func TestFileUserRepository(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("CreateUser success and FindByEmail", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestFileUserRepository(t *testing.T) {
 		if err := repo.CreateUser(ctx, u); err != nil {
 			t.Fatalf("CreateUser: %v", err)
 		}
-		found, err := repo.FindByEmail(ctx, u.Email)
+		found, err := repo.FindByEmail(ctx, entity.DefaultTenantID, u.Email)
 		if err != nil {
 			t.Fatalf("FindByEmail: %v", err)
 		}
@@ -239,7 +239,7 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("CreateUser duplicate email returns ErrConflict", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -254,18 +254,18 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("FindByEmail not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
-		_, err = repo.FindByEmail(ctx, "missing@example.com")
+		_, err = repo.FindByEmail(ctx, entity.DefaultTenantID, "missing@example.com")
 		if !errors.Is(err, coreerror.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 
 	t.Run("FindByID found and not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -287,7 +287,7 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("Save updates existing user", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -299,7 +299,7 @@ func TestFileUserRepository(t *testing.T) {
 		if err := repo.Save(ctx, u); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
-		found, err := repo.FindByEmail(ctx, u.Email)
+		found, err := repo.FindByEmail(ctx, entity.DefaultTenantID, u.Email)
 		if err != nil {
 			t.Fatalf("FindByEmail after Save: %v", err)
 		}
@@ -309,7 +309,7 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("FindByPasswordResetTokenHash found and not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -333,7 +333,7 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("UpdateByPasswordResetTokenHash success", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
@@ -359,7 +359,7 @@ func TestFileUserRepository(t *testing.T) {
 	})
 
 	t.Run("UpdateByPasswordResetTokenHash not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), nil, testCipher(t))
+		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}

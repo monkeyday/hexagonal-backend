@@ -29,7 +29,7 @@ func NewForgotPasswordUseCase(deps define.Dependencies) usecase.UseCase {
 func (uc *ForgotPasswordUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*ForgotPasswordCommand)
 
-	user, _ := uc.userRepo.FindByEmail(ctx, c.Email)
+	user, _ := uc.userRepo.FindByEmail(ctx, entity.DefaultTenantID, c.Email)
 	if user == nil {
 		return nil, nil
 	}

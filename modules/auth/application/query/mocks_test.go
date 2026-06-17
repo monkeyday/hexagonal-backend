@@ -83,9 +83,9 @@ func (m *mockUserRepo) CreateUser(_ context.Context, user *entity.User) error {
 	return nil
 }
 
-func (m *mockUserRepo) FindByEmail(_ context.Context, email string) (*entity.User, error) {
+func (m *mockUserRepo) FindByEmail(_ context.Context, tenantID entity.TenantID, email string) (*entity.User, error) {
 	for _, u := range m.users {
-		if u.Email == email {
+		if u.Email == email && u.TenantID == tenantID {
 			return u, nil
 		}
 	}

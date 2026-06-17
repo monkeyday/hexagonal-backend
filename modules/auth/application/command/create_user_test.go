@@ -210,7 +210,7 @@ func TestCreateUserUseCase(t *testing.T) {
 			}
 
 			// password must be stored as hash, not plaintext
-			saved, _ := tc.repo.FindByEmail(ctx, tc.cmd.Email)
+			saved, _ := tc.repo.FindByEmail(ctx, entity.DefaultTenantID, tc.cmd.Email)
 			if saved == nil {
 				t.Fatal("user not found in repo after save")
 			}

@@ -2,10 +2,9 @@ package adapter
 
 import (
 	"context"
-	"fmt"
-	"time"
 
-	crypto "sc/core/crypto"
+	"sc/core/crypto"
+	coreerror "sc/core/error"
 	filerepo "sc/infrastructure/repository/file"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
@@ -17,12 +16,10 @@ type UserRepository struct {
 	repo *filerepo.FileRepository[entity.User, userDoc]
 }
 
-func NewUserRepository(store *filerepo.FileStore, seed map[string]*entity.User, c *crypto.Cipher) (*UserRepository, error) {
+func NewUserRepository(store *filerepo.FileStore, c *crypto.Cipher) (*UserRepository, error) {
 	codec := newUserCodec(c)
 	repo, err := filerepo.New[entity.User, userDoc](
-		store, seed,
-		codec.toDoc, codec.toEntity,
-		func(u *entity.User) string { return string(u.ID) },
+		store, codec.toDoc, codec.toEntity, func(u *entity.User) string { return string(u.ID) },
 	)
 	if err != nil {
 		return nil, err
@@ -34,8 +31,18 @@ func (r *UserRepository) CreateUser(_ context.Context, user *entity.User) error 
 	return r.repo.CreateIfFieldNotExists("Email", user.Email, user)
 }
 
-func (r *UserRepository) FindByEmail(_ context.Context, email string) (*entity.User, error) {
-	return r.repo.FindByField("Email", email)
+func (r *UserRepository) FindByEmail(_ context.Context, tenantID entity.TenantID, email string) (*entity.User, error) {
+	// The generic file store indexes a single field, so we match on email and
+	// then guard the tenant. Email is a unique per tenant; in the single-realm
+	// dev backend this is exact. The multi-tenant production path is Mongo.
+	user, err := r.repo.FindByField("Email", email)
+	if err != nil {
+		return nil, err
+	}
+	if user.TenantID != tenantID {
+		return nil, coreerror.ErrNotFound
+	}
+	return user, nil
 }
 
 func (r *UserRepository) FindByID(_ context.Context, id entity.UserID) (*entity.User, error) {
@@ -52,77 +59,4 @@ func (r *UserRepository) Save(_ context.Context, user *entity.User) error {
 
 func (r *UserRepository) UpdateByPasswordResetTokenHash(_ context.Context, tokenHash string, update func(*entity.User) error) error {
 	return r.repo.UpdateByField("PasswordResetTokenHash", tokenHash, update)
-}
-
-type userDoc struct {
-	ID                     string     `json:"id"                       bson:"_id"`
-	TenantID               string     `json:"tenant_id"                bson:"tenant_id"`
-	Username               string     `json:"username"                 bson:"username"`
-	Nickname               string     `json:"nickname"                 bson:"nickname"`
-	Password               string     `json:"password"                 bson:"password"`
-	EmailCiphertext        string     `json:"email_ciphertext"         bson:"email_ciphertext"`
-	EmailBlindIndex        string     `json:"email_blind_index"        bson:"email_blind_index"`
-	EmailVerified          bool       `json:"email_verified"           bson:"email_verified"`
-	PasswordResetTokenHash *string    `json:"password_reset_token_hash,omitempty" bson:"password_reset_token_hash,omitempty"`
-	PasswordResetExpiresAt *time.Time `json:"password_reset_expires_at,omitempty" bson:"password_reset_expires_at,omitempty"`
-	SessionsInvalidatedAt  *time.Time `json:"sessions_invalidated_at,omitempty"   bson:"sessions_invalidated_at,omitempty"`
-	FailedLoginAttempts    int        `json:"failed_login_attempts"               bson:"failed_login_attempts"`
-	LockedUntil            *time.Time `json:"locked_until,omitempty"              bson:"locked_until,omitempty"`
-	CreatedAt              time.Time  `json:"created_at"               bson:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"               bson:"updated_at"`
-}
-
-type userCodec struct{ cipher *crypto.Cipher }
-
-func newUserCodec(c *crypto.Cipher) *userCodec { return &userCodec{cipher: c} }
-
-func (uc *userCodec) toDoc(u *entity.User) *userDoc {
-	ciphertext, err := uc.cipher.Encrypt(u.Email)
-	if err != nil {
-		panic(fmt.Sprintf("encrypt email: %v", err))
-	}
-	return &userDoc{
-		ID:                     string(u.ID),
-		TenantID:               string(u.TenantID),
-		Username:               u.Username,
-		Nickname:               u.Nickname,
-		Password:               u.Password,
-		EmailCiphertext:        ciphertext,
-		EmailBlindIndex:        uc.cipher.BlindIndex(u.Email),
-		EmailVerified:          u.EmailVerified,
-		PasswordResetTokenHash: u.PasswordResetTokenHash,
-		PasswordResetExpiresAt: u.PasswordResetExpiresAt,
-		SessionsInvalidatedAt:  u.SessionsInvalidatedAt,
-		FailedLoginAttempts:    u.FailedLoginAttempts,
-		LockedUntil:            u.LockedUntil,
-		CreatedAt:              u.CreatedAt,
-		UpdatedAt:              u.UpdatedAt,
-	}
-}
-
-func (uc *userCodec) toEntity(d *userDoc) (*entity.User, error) {
-	email, err := uc.cipher.Decrypt(d.EmailCiphertext)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt email for user %s: %w", d.ID, err)
-	}
-	tenantID := entity.TenantID(d.TenantID)
-	if tenantID == "" {
-		tenantID = entity.DefaultTenantID
-	}
-	return &entity.User{
-		ID:                     entity.UserID(d.ID),
-		TenantID:               tenantID,
-		Username:               d.Username,
-		Nickname:               d.Nickname,
-		Password:               d.Password,
-		Email:                  email,
-		EmailVerified:          d.EmailVerified,
-		PasswordResetTokenHash: d.PasswordResetTokenHash,
-		PasswordResetExpiresAt: d.PasswordResetExpiresAt,
-		SessionsInvalidatedAt:  d.SessionsInvalidatedAt,
-		FailedLoginAttempts:    d.FailedLoginAttempts,
-		LockedUntil:            d.LockedUntil,
-		CreatedAt:              d.CreatedAt,
-		UpdatedAt:              d.UpdatedAt,
-	}, nil
 }
