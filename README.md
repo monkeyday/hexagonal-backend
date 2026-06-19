@@ -19,15 +19,14 @@ An OIDC server written in Go with a production-oriented hexagonal architecture, 
 
 ## Features
 
-- **Authorization Code Flow** — state and nonce validation; optional PKCE parameters accepted for compatible clients
+- **Authorization Code Flow** — state and nonce validation; PKCE (S256) required for public clients, with RFC 6749 §4.1.2.1 error redirects
 - **Token lifecycle** — RS256-signed access tokens, opaque refresh tokens with rotation, ID tokens with nonce
 - **Security** — CSRF protection on sign-in, brute-force lockout after three failed attempts, atomic session consumption, distributed rate limiting
 - **OIDC provider surface** — Discovery, JWKS, UserInfo, token introspection (RFC 7662), token revocation (RFC 7009), logout
+- **RFC 6749 errors** — token/revoke/introspect return `{error, error_description}` (§5.2) with `WWW-Authenticate` on `invalid_client`; `/authorize` returns §4.1.2.1 error redirects
 - **Storage** — pluggable: file-based (default) or MongoDB
 - **Cache** — pluggable: in-memory (default) or Redis
-- **Password reset** — email-based reset flow; logs reset links to stdout when `SMTP_HOST` is unset
-
-> PKCE parameters (`code_challenge`, `code_challenge_method=S256`) are currently accepted when provided. Mandatory PKCE enforcement for public clients is planned for a later phase.
+- **Password reset** — email-based reset flow (rate-limited to 3/hour per email); logs reset links to stdout when `SMTP_HOST` is unset
 
 ---
 
@@ -60,6 +59,7 @@ infrastructure/
   cache/          — Redis and in-memory cache
   repository/     — MongoDB and file-based repo drivers
   smtp/           — persistent SMTP client (STARTTLS, reconnect, deadline enforcement)
+conformance/      — in-process OIDC conformance suite (Go httptest)
 e2e/              — shell-based end-to-end test suite
 smoke_test/       — k6 smoke scripts per endpoint and flow verification
 http/             — auth.http IDE request file (VS Code / IntelliJ)
@@ -202,6 +202,19 @@ Table-driven tests alongside the code they test. Run before any commit touching 
 
 ```sh
 go test ./...
+```
+
+### OIDC conformance suite (`conformance/`)
+
+In-process Go suite that boots the real auth module over an `httptest` server
+(file + in-memory adapters, real RSA keys, issuer = server URL) and asserts OIDC
+Core + RFC conformance: discovery metadata, JWKS shape, the full
+authorization-code + PKCE flow, **id_token signature verification against the
+published JWKS**, UserInfo, single-use authorization codes, and RFC 6749 error
+bodies/redirects. Runs as part of `go test ./...`, no external services.
+
+```sh
+go test ./conformance/ -run TestOIDCConformance -v
 ```
 
 ### E2E tests (`e2e/test_auth.sh`)

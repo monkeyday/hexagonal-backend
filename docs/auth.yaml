@@ -32,6 +32,26 @@ components:
           type: integer
           example: 10002
 
+    # ── RFC 6749 §5.2 error (OAuth2 endpoints: token, revoke, introspect) ──────
+    OAuth2Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_client
+            - invalid_grant
+            - unauthorized_client
+            - unsupported_grant_type
+            - invalid_scope
+            - server_error
+          example: invalid_grant
+        error_description:
+          type: string
+          example: invalid authorization code
+
     # ── Token response (shared by password grant, code exchange, refresh) ─────
     TokenResponse:
       type: object
@@ -235,6 +255,30 @@ components:
                 type: string
                 example: too many requests
 
+    OAuth2BadRequest:
+      description: RFC 6749 §5.2 error response.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuth2Error'
+          example:
+            error: invalid_grant
+            error_description: invalid authorization code
+
+    OAuth2Unauthorized:
+      description: Client authentication failed (RFC 6749 §5.2).
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Basic realm="oauth2"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuth2Error'
+          example:
+            error: invalid_client
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 paths:
 
@@ -403,25 +447,38 @@ paths:
             description: Required when `code_challenge` is present.
       responses:
         '302':
-          description: Redirect to `/sign-in` with `auth_session` cookie set.
+          description: |
+            Either success or an RFC 6749 §4.1.2.1 error redirect:
+            - **Success:** redirect to `/sign-in` with the `auth_session` cookie set.
+            - **Protocol error with a registered client:** redirect to
+              `redirect_uri?error=<code>&state=<state>` (e.g.
+              `unsupported_response_type`, `invalid_scope`, `invalid_request` for
+              missing/invalid PKCE). The error is returned to the client, not shown here.
           headers:
             Location:
               schema:
                 type: string
-              example: /sign-in
+              examples:
+                signIn:
+                  value: /sign-in
+                errorRedirect:
+                  value: https://app.example.com/callback?error=unsupported_response_type&state=xyz
             Set-Cookie:
               schema:
                 type: string
               example: auth_session=<session_id>; HttpOnly; SameSite=Lax
         '400':
-          description: Invalid `redirect_uri` or unsupported `response_type`.
+          description: |
+            Direct error (not redirected) when `client_id` or `redirect_uri` is
+            missing/unregistered or malformed — the endpoint must not redirect to
+            an untrusted URI.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
-                msg: unsupported response_type
-                err_code: 10020
+                msg: client redirect_uri not valid
+                err_code: 10001
 
   # ── Token ─────────────────────────────────────────────────────────────────────
   /token:
@@ -554,16 +611,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/TokenResponse'
         '400':
-          description: Unsupported grant type or missing parameters.
+          description: Unsupported grant type, malformed request, or invalid grant (RFC 6749 §5.2).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/OAuth2Error'
               example:
-                msg: unsupported grant type
-                err_code: 10021
+                error: unsupported_grant_type
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          $ref: '#/components/responses/OAuth2Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -655,9 +711,9 @@ paths:
         '200':
           description: Token revoked (or was already invalid).
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/OAuth2BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          $ref: '#/components/responses/OAuth2Unauthorized'
 
   /oidc/introspect:
     post:
@@ -690,7 +746,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IntrospectResponse'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          $ref: '#/components/responses/OAuth2Unauthorized'
 
   /oidc/logout:
     get:
@@ -787,9 +843,16 @@ paths:
             enum: [S256]
       responses:
         '302':
-          description: Redirect to `/sign-in`.
+          description: |
+            Redirect to `/sign-in` on success, or an RFC 6749 §4.1.2.1 error
+            redirect (`redirect_uri?error=...&state=...`) for a protocol error
+            with a registered client. See `GET /authorize`.
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Direct error when `client_id`/`redirect_uri` is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
   /protocol/openid-connect/certs:
     get:
@@ -892,6 +955,8 @@ paths:
       description: |
         Generates a short-lived reset token and emails it to the user.
         Always returns `200` to avoid revealing whether the email exists.
+        Rate-limited to 3 requests per email per hour; requests beyond the cap
+        return the same `200` but send no email.
       tags: [Account]
       requestBody:
         required: true
