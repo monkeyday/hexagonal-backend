@@ -17,9 +17,15 @@ on:
 permissions:
   contents: read
 
+# Serialize per ref but never cancel an in-flight load run.
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   stress:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       mongo:
         image: mongo:7
@@ -42,11 +48,11 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Ensure node binary (act only)
         if: ${{ env.ACT == 'true' }}
         run: command -v node || apt-get install -y nodejs
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
