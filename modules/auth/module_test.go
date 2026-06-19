@@ -18,6 +18,7 @@ func TestHTTPStatusMapper(t *testing.T) {
 		{"weak password", autherrors.WeakPassword, http.StatusBadRequest},
 		{"unsupported response type", autherrors.UnsupportedResponseType, http.StatusBadRequest},
 		{"unsupported grant type", autherrors.UnsupportedGrantType, http.StatusBadRequest},
+		{"unsupported scope", autherrors.UnsupportedScope, http.StatusBadRequest},
 		{"max login attempts exceeded", autherrors.MaxLoginAttemptsExceeded, http.StatusBadRequest},
 		{"invalid auth request", autherrors.InvalidAuthRequest, http.StatusBadRequest},
 		{"auth code not found", autherrors.AuthCodeNotFound, http.StatusBadRequest},
@@ -32,8 +33,8 @@ func TestHTTPStatusMapper(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := httpStatusMapper(tt.code); got != tt.want {
-				t.Errorf("httpStatusMapper(%d) = %d, want %d", tt.code, got, tt.want)
+			if got := autherrors.HTTPStatusFor(tt.code); got != tt.want {
+				t.Errorf("HTTPStatusFor(%d) = %d, want %d", tt.code, got, tt.want)
 			}
 		})
 	}

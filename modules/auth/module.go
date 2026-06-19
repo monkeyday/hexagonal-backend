@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"net/http"
 	coreerror "sc/core/error"
 	coremetrics "sc/core/metrics"
 	"sc/core/usecase"
@@ -73,7 +72,7 @@ func (m *Module) MapHTTPError(err error) error {
 	if hs, ok := err.(interface{ HTTPStatus() int }); ok && hs.HTTPStatus() != 0 {
 		return autherrors.HTTPError{ErrorStruct: coreerror.NewErrorStruct(e.Code(), hs.HTTPStatus(), err)}
 	}
-	return autherrors.HTTPError{ErrorStruct: coreerror.NewErrorStruct(e.Code(), httpStatusMapper(e.Code()), err)}
+	return autherrors.HTTPError{ErrorStruct: coreerror.NewErrorStruct(e.Code(), autherrors.HTTPStatusFor(e.Code()), err)}
 }
 
 func (m *Module) registerUseCases(deps define.Dependencies) {
@@ -93,30 +92,4 @@ func (m *Module) registerUseCases(deps define.Dependencies) {
 	m.Register(query.GetProfileQuery{}, query.NewGetProfileUseCase(deps))
 	m.Register(query.GetJWKSQuery{}, query.NewGetJWKSUseCase(deps))
 	m.Register(query.IntrospectTokenQuery{}, query.NewIntrospectTokenUseCase(deps))
-}
-
-func httpStatusMapper(code coreerror.ErrCode) int {
-	switch code {
-	case autherrors.InvalidArguments,
-		autherrors.WeakPassword,
-		autherrors.UnsupportedResponseType,
-		autherrors.UnsupportedGrantType,
-		autherrors.MaxLoginAttemptsExceeded,
-		autherrors.InvalidAuthRequest:
-		return http.StatusBadRequest
-	case autherrors.InvalidToken,
-		autherrors.InvalidRefreshToken,
-		autherrors.InvalidEmailOrPassword,
-		autherrors.InvalidClient,
-		autherrors.PasswordResetTokenExpired:
-		return http.StatusUnauthorized
-	case autherrors.AuthCodeNotFound:
-		return http.StatusBadRequest
-	case autherrors.PasswordResetTokenNotFound:
-		return http.StatusNotFound
-	case autherrors.EmailDuplicated:
-		return http.StatusConflict
-	default:
-		return http.StatusInternalServerError
-	}
 }
