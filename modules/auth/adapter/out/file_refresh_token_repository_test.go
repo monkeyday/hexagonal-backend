@@ -1,14 +1,12 @@
 package adapter
 
 import (
-	"context"
-	"errors"
 	"testing"
 	"time"
 
-	coreerror "sc/core/error"
 	filerepo "sc/infrastructure/repository/file"
 	"sc/modules/auth/domain/entity"
+	"sc/modules/auth/port"
 )
 
 func newRTFileStore(t *testing.T) *filerepo.FileStore {
@@ -21,7 +19,9 @@ func newRTFileStore(t *testing.T) *filerepo.FileStore {
 }
 
 func newTestRefreshToken(id, userID, tokenHash string, expiresIn time.Duration) *entity.RefreshToken {
-	now := time.Now().Round(0)
+	// Millisecond precision so the value survives both JSON (file) and BSON
+	// (mongo) round-trips identically — BSON datetimes are millisecond-grained.
+	now := time.Now().UTC().Truncate(time.Millisecond)
 	return &entity.RefreshToken{
 		ID:              id,
 		UserID:          entity.UserID(userID),
@@ -108,140 +108,11 @@ func TestRtToEntityScopeError(t *testing.T) {
 }
 
 func TestFileRefreshTokenRepository(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("Save and FindByTokenHash", func(t *testing.T) {
+	runRefreshTokenContract(t, func(t *testing.T) port.RefreshTokenRepository {
 		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
 		if err != nil {
 			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
 		}
-		rt := newTestRefreshToken("rt-1", "user-1", "hash-abc", 30*24*time.Hour)
-		if err := repo.Save(ctx, rt); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		found, err := repo.FindByTokenHash(ctx, rt.TokenHash)
-		if err != nil {
-			t.Fatalf("FindByTokenHash: %v", err)
-		}
-		if found.ID != rt.ID {
-			t.Errorf("ID: got %q, want %q", found.ID, rt.ID)
-		}
-	})
-
-	t.Run("FindByTokenHash not found", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-		_, err = repo.FindByTokenHash(ctx, "nonexistent-hash")
-		if !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("RevokeByTokenHash revokes active token", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-		rt := newTestRefreshToken("rt-1", "user-1", "hash-active", 30*24*time.Hour)
-		if err := repo.Save(ctx, rt); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		if err := repo.RevokeByTokenHash(ctx, rt.TokenHash); err != nil {
-			t.Fatalf("RevokeByTokenHash: %v", err)
-		}
-		found, err := repo.FindByTokenHash(ctx, rt.TokenHash)
-		if err != nil {
-			t.Fatalf("FindByTokenHash: %v", err)
-		}
-		if found.RevokedAt == nil {
-			t.Error("RevokedAt should be set after revocation")
-		}
-	})
-
-	t.Run("RevokeByTokenHash already revoked returns ErrNotFound", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-		rt := newTestRefreshToken("rt-1", "user-1", "hash-revoked", 30*24*time.Hour)
-		now := time.Now()
-		rt.RevokedAt = &now
-		if err := repo.Save(ctx, rt); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		if err := repo.RevokeByTokenHash(ctx, rt.TokenHash); !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("RevokeByTokenHash expired token returns ErrNotFound", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-		rt := newTestRefreshToken("rt-1", "user-1", "hash-expired", -time.Hour)
-		if err := repo.Save(ctx, rt); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		if err := repo.RevokeByTokenHash(ctx, rt.TokenHash); !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("RevokeByTokenHash nonexistent returns ErrNotFound", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-		if err := repo.RevokeByTokenHash(ctx, "does-not-exist"); !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("RevokeAllForUser revokes only active tokens for target user", func(t *testing.T) {
-		repo, err := NewFileRefreshTokenRepository(newRTFileStore(t))
-		if err != nil {
-			t.Fatalf("NewFileRefreshTokenRepository: %v", err)
-		}
-
-		userA := entity.UserID("user-a")
-		userB := entity.UserID("user-b")
-
-		rtA1 := newTestRefreshToken("rt-a1", string(userA), "hash-a1", 30*24*time.Hour)
-		rtA2 := newTestRefreshToken("rt-a2", string(userA), "hash-a2", 30*24*time.Hour)
-		rtARevoked := newTestRefreshToken("rt-a3", string(userA), "hash-a3", 30*24*time.Hour)
-		revokedAt := time.Now()
-		rtARevoked.RevokedAt = &revokedAt
-		rtB := newTestRefreshToken("rt-b1", string(userB), "hash-b1", 30*24*time.Hour)
-
-		for _, rt := range []*entity.RefreshToken{rtA1, rtA2, rtARevoked, rtB} {
-			if err := repo.Save(ctx, rt); err != nil {
-				t.Fatalf("Save %q: %v", rt.ID, err)
-			}
-		}
-
-		if err := repo.RevokeAllForUser(ctx, userA); err != nil {
-			t.Fatalf("RevokeAllForUser: %v", err)
-		}
-
-		for _, hash := range []string{rtA1.TokenHash, rtA2.TokenHash} {
-			found, err := repo.FindByTokenHash(ctx, hash)
-			if err != nil {
-				t.Fatalf("FindByTokenHash(%q): %v", hash, err)
-			}
-			if found.RevokedAt == nil {
-				t.Errorf("token %q should be revoked after RevokeAllForUser", hash)
-			}
-		}
-
-		foundB, err := repo.FindByTokenHash(ctx, rtB.TokenHash)
-		if err != nil {
-			t.Fatalf("FindByTokenHash(userB): %v", err)
-		}
-		if foundB.RevokedAt != nil {
-			t.Error("userB's token should not be revoked")
-		}
+		return repo
 	})
 }
