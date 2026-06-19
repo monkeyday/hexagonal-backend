@@ -174,4 +174,34 @@ func TestForgotPasswordUseCase(t *testing.T) {
 			t.Error("expected reset token to be stored even with nil emailSender")
 		}
 	})
+
+	t.Run("per-email rate limit — requests beyond the cap are dropped", func(t *testing.T) {
+		cache := newMockCache()
+		repo := newMockRepo(newTestUser())
+		const email = "test@example.com"
+
+		send := func(sender *mockEmailSender) {
+			mod := usecase.NewRegistry()
+			mod.Register(ForgotPasswordCommand{}, NewForgotPasswordUseCase(define.Dependencies{
+				UserRepo: repo, EmailSender: sender, Cache: cache,
+			}))
+			if _, err := mod.Dispatch(ctx, &ForgotPasswordCommand{Email: email}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+
+		for i := 0; i < forgotPasswordMaxPerWindow; i++ {
+			s := &mockEmailSender{}
+			send(s)
+			if s.sentTo != email {
+				t.Fatalf("request %d within the cap should send, sentTo = %q", i+1, s.sentTo)
+			}
+		}
+
+		over := &mockEmailSender{}
+		send(over)
+		if over.sentTo != "" {
+			t.Errorf("request beyond the cap should be dropped, but sent to %q", over.sentTo)
+		}
+	})
 }

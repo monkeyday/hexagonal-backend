@@ -164,12 +164,14 @@ func (m *mockUserRepo) Save(_ context.Context, user *entity.User) error {
 // ── mock Cache ────────────────────────────────────────────────────────────────
 
 type mockCache struct {
-	items  map[string]any
-	setErr error
+	items   map[string]any
+	counts  map[string]int64
+	setErr  error
+	incrErr error
 }
 
 func newMockCache() *mockCache {
-	return &mockCache{items: make(map[string]any)}
+	return &mockCache{items: make(map[string]any), counts: make(map[string]int64)}
 }
 
 func (m *mockCache) seed(key string, value any) *mockCache {
@@ -214,8 +216,12 @@ func (m *mockCache) GetErr(_ context.Context, key string, dest any) (bool, error
 	return m.Get(context.TODO(), key, dest), nil
 }
 func (m *mockCache) Delete(_ context.Context, key string) { delete(m.items, key) }
-func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (int64, error) {
-	return 0, nil
+func (m *mockCache) IncrWindow(_ context.Context, key string, _ time.Duration) (int64, error) {
+	if m.incrErr != nil {
+		return 0, m.incrErr
+	}
+	m.counts[key]++
+	return m.counts[key], nil
 }
 
 // ── mock EmailSender ──────────────────────────────────────────────────────────
