@@ -20,9 +20,14 @@ linters:
         linters: [errcheck]
       - text: 'reflect\.Ptr should be inlined'
         linters: [govet]
-      - text: 'G304'
+      # G304 (file inclusion via variable): paths come from operator config,
+      # not user input — the file repository's storage path and the JWT key
+      # file paths. Scoped per-file so new G304s elsewhere are still caught.
+      - path: 'infrastructure/repository/file/file_repository\.go'
+        text: 'G304'
         linters: [gosec]
-      - text: 'G115'
+      - path: 'infrastructure/jwt/jwt_service\.go'
+        text: 'G304'
         linters: [gosec]
       - path: 'core/validator/'
         text: 'G101'

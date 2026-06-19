@@ -13,10 +13,15 @@ import (
 	"sc/handler/web/middleware"
 	"sc/handler/web/responder"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
+
+// metricsReadHeaderTimeout bounds how long the internal metrics listener will
+// wait for request headers, preventing slow-header (Slowloris) hangs.
+const metricsReadHeaderTimeout = 5 * time.Second
 
 type HTTPErrorMapper interface {
 	MapHTTPError(err error) error
@@ -84,8 +89,13 @@ func startMetricsServer(addr string) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/debug/vars", expvar.Handler())
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: metricsReadHeaderTimeout,
+	}
 	go func() {
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := srv.ListenAndServe(); err != nil {
 			log.Error().Err(err).Str("addr", addr).Msg("metrics server stopped")
 		}
 	}()
