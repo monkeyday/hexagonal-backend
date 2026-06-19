@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"sc/core/validator"
 	coreweb "sc/core/web"
@@ -76,10 +77,12 @@ func Load(entryPath string) *Settings {
 
 		cfg = &Settings{
 			Server: coreweb.Config{
-				Port:         os.Getenv("PORT"),
-				CorsOrigins:  parseCorsOrigins(os.Getenv("CORS_ORIGINS")),
-				CookieSecure: os.Getenv("COOKIE_SECURE") == "true",
-				MetricsAddr:  os.Getenv("METRICS_ADDR"),
+				Port:            os.Getenv("PORT"),
+				CorsOrigins:     parseCorsOrigins(os.Getenv("CORS_ORIGINS")),
+				CookieSecure:    os.Getenv("COOKIE_SECURE") == "true",
+				MetricsAddr:     os.Getenv("METRICS_ADDR"),
+				RateLimitPerMin: parseRateLimitPerMin(os.Getenv("RATE_LIMIT_PER_MIN")),
+				RateLimitWindow: parseRateLimitWindow(os.Getenv("RATE_LIMIT_WINDOW")),
 			},
 			JWT: infrajwt.Config{
 				PrivateKeyPath: os.Getenv("PRIVATE_KEY_PATH"),
@@ -145,6 +148,39 @@ const (
 	defaultClientID         = "client-123"
 	defaultClientAuthMethod = "none"
 )
+
+const (
+	defaultRateLimitPerMin = 1000
+	defaultRateLimitWindow = time.Minute
+)
+
+// parseRateLimitPerMin returns the per-window request cap. Unset falls back to
+// the production default; an explicit 0 disables rate limiting (load/stress).
+func parseRateLimitPerMin(raw string) int64 {
+	if raw == "" {
+		return defaultRateLimitPerMin
+	}
+	limit, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || limit < 0 {
+		log.Error().Str("RATE_LIMIT_PER_MIN", raw).Msg("invalid RATE_LIMIT_PER_MIN value; must be a non-negative integer")
+		panic("invalid RATE_LIMIT_PER_MIN configuration")
+	}
+	return limit
+}
+
+// parseRateLimitWindow returns the rate-limit window. Unset falls back to one
+// minute; the value must be a positive Go duration (e.g. "1m", "30s").
+func parseRateLimitWindow(raw string) time.Duration {
+	if raw == "" {
+		return defaultRateLimitWindow
+	}
+	window, err := time.ParseDuration(raw)
+	if err != nil || window <= 0 {
+		log.Error().Str("RATE_LIMIT_WINDOW", raw).Msg("invalid RATE_LIMIT_WINDOW value; must be a positive Go duration")
+		panic("invalid RATE_LIMIT_WINDOW configuration")
+	}
+	return window
+}
 
 var (
 	defaultClientRedirectURIs = []string{"https://app.example.com/callback", "http://localhost:3000/callback"}

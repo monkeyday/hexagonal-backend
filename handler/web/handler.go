@@ -13,7 +13,6 @@ import (
 	"sc/handler/web/middleware"
 	"sc/handler/web/responder"
 	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -71,7 +70,9 @@ func (e *Engine) setMiddlewares(args Args) {
 	e.Use(middleware.SecurityHeaders())
 	e.Use(middleware.Cors(args.Server.CorsOrigins))
 	e.Use(middleware.CookieSecure(args.Server.CookieSecure))
-	e.Use(middleware.DistributedRateLimit(args.Cache, 1000, time.Minute))
+	if args.Server.RateLimitPerMin > 0 {
+		e.Use(middleware.DistributedRateLimit(args.Cache, args.Server.RateLimitPerMin, args.Server.RateLimitWindow))
+	}
 }
 
 // startMetricsServer exposes expvar on a separate internal-only listener.
