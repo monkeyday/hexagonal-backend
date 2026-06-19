@@ -39,6 +39,8 @@ export default function (tokens) {
   const unauth = http.get(`${BASE_URL}/userinfo`, { responseCallback: expectedStatuses(401) });
   check(unauth, {
     'no token: status 401':  (r) => r.status === 401,
-    'no token: err_code':    (r) => r.json('err_code') === 10002,
+    // userinfo is guarded by the Authenticate middleware, which returns the
+    // generic coreerror.Unauthorized (40001), not an auth-module error code.
+    'no token: err_code':    (r) => r.json('err_code') === 40001,
   });
 }
