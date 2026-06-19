@@ -1,0 +1,116 @@
+name: Stress
+
+# Opt-in load suite. Heavy (spins MongoDB + Redis, runs k6 for several
+# minutes), so it is manual-only rather than gating every push/PR. Latency
+# thresholds are not yet calibrated, so P95_MAX is set generously and the run
+# gates on correctness (checks + http_req_failed) only.
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: Base virtual users per scenario
+        default: "10"
+      duration:
+        description: Steady-state hold per scenario
+        default: "30s"
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        # The auth config requires credentials (Username/Password/AuthSource),
+        # so the server cannot talk to a no-auth Mongo — enable root auth here
+        # and mirror it in ci.env below.
+        env:
+          MONGO_INITDB_ROOT_USERNAME: stress
+          MONGO_INITDB_ROOT_PASSWORD: stress
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet -u stress -p stress --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate RSA key pair
+        run: |
+          mkdir -p ci-keys
+          openssl genrsa -out ci-keys/private_key.pem 2048
+          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
+
+      - name: Write CI .env
+        run: |
+          cat > ci.env << EOF
+          PORT=:9876
+          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
+          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
+          JWT_KID=stress
+          JWT_ISSUER=http://127.0.0.1:9876
+          REPOSITORY_USED=mongo
+          MONGO_HOST=localhost:27017
+          MONGO_USER=stress
+          MONGO_PASSWORD=stress
+          MONGO_AUTH_SOURCE=admin
+          MONGO_DATABASE=stress
+          REDIS_ADDR=localhost:6379
+          OAUTH_CLIENT_ID=smoke-client
+          OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
+          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=https://app.example.com/logged-out
+          METRICS_ADDR=127.0.0.1:9878
+          RATE_LIMIT_PER_MIN=0
+          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
+          EOF
+
+      - name: Build server
+        run: go build -o bin/auth ./cmd/auth
+
+      - name: Install k6
+        run: |
+          curl -sSfL "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 k6-v2.0.0-linux-amd64/k6
+
+      - name: Run stress scenarios
+        env:
+          ENV_PATH: ${{ github.workspace }}/ci.env
+          VUS: ${{ github.event.inputs.vus }}
+          DURATION: ${{ github.event.inputs.duration }}
+          # Uncalibrated latencies on shared CI runners: gate on errors, not p95.
+          P95_MAX: "5000"
+        run: |
+          ./bin/auth > /tmp/server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9876/.well-known/openid-configuration > /dev/null 2>&1 && break
+            sleep 1
+          done
+          set -e
+          k6 run -e VUS="$VUS"          -e DURATION="$DURATION" stress_test/token_refresh.js
+          k6 run -e VUS="$((VUS * 2))"  -e DURATION="$DURATION" stress_test/userinfo.js
+          k6 run -e VUS="$VUS"          -e DURATION="$DURATION" stress_test/auth_code_flow.js
+          k6 run -e VUS="$VUS"          -e DURATION="$DURATION" stress_test/mixed.js
+          k6 run -e BASELINE="$VUS"     -e SPIKE="$((VUS * 4))"  stress_test/spike.js
+          k6 run -e VUS="$VUS"          -e DURATION="$DURATION" stress_test/soak.js
+
+      - name: Show server log
+        if: always()
+        run: cat /tmp/server.log || true

@@ -54,11 +54,16 @@ export function rampingScenario(target, hold = '1m', rampUp = '15s', rampDown = 
  * Build per-endpoint latency + failure thresholds.
  * Pass endpoint tag names; requests tagged `{ endpoint: name }` are measured
  * independently. Example: perEndpointThresholds(['userinfo', 'refresh']).
+ *
+ * The per-script p95 default can be overridden globally with P95_MAX, e.g. in
+ * CI where latency baselines are not yet calibrated and only correctness
+ * (checks + http_req_failed) should gate the run.
  */
 export function perEndpointThresholds(endpoints, p95 = 800) {
+  const limit = Number(__ENV.P95_MAX || p95);
   const t = { http_req_failed: ['rate<0.01'] };
   for (const name of endpoints) {
-    t[`http_req_duration{endpoint:${name}}`] = [`p(95)<${p95}`];
+    t[`http_req_duration{endpoint:${name}}`] = [`p(95)<${limit}`];
   }
   return t;
 }
