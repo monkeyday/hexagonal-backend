@@ -17,28 +17,28 @@ import (
 
 const testIssuer = "https://issuer.test"
 
-func newTestService(t *testing.T) *JWTService {
-	t.Helper()
+func newTestService(tb testing.TB) *JWTService {
+	tb.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("generate key: %v", err)
+		tb.Fatalf("generate key: %v", err)
 	}
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
-		t.Fatalf("marshal public key: %v", err)
+		tb.Fatalf("marshal public key: %v", err)
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
 
-	dir := t.TempDir()
+	dir := tb.TempDir()
 	privPath := filepath.Join(dir, "private.pem")
 	pubPath := filepath.Join(dir, "public.pem")
 	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
-		t.Fatalf("write private key: %v", err)
+		tb.Fatalf("write private key: %v", err)
 	}
 	if err := os.WriteFile(pubPath, pubPEM, 0o600); err != nil {
-		t.Fatalf("write public key: %v", err)
+		tb.Fatalf("write public key: %v", err)
 	}
 
 	svc, err := NewJWTService(Config{
@@ -48,9 +48,9 @@ func newTestService(t *testing.T) *JWTService {
 		Kid:            "test-kid",
 	})
 	if err != nil {
-		t.Fatalf("NewJWTService: %v", err)
+		tb.Fatalf("NewJWTService: %v", err)
 	}
-	t.Cleanup(svc.Close)
+	tb.Cleanup(svc.Close)
 	return svc
 }
 
