@@ -35,6 +35,11 @@ linters:
       - path: 'modules/auth/application/define/metrics\.go'
         text: 'G101'
         linters: [gosec]
+      # cache_keys.go holds cache-key format strings, not credentials; G101
+      # false-positives on "Password" in ForgotPasswordRateKey's name.
+      - path: 'modules/auth/application/define/cache_keys\.go'
+        text: 'G101'
+        linters: [gosec]
       - path: 'infrastructure/repository/file/file_repository\.go'
         text: 'G104'
         linters: [gosec]
