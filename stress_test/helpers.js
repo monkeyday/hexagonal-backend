@@ -22,7 +22,7 @@ export const REDIRECT_URI = __ENV.REDIRECT_URI || 'https://app.example.com/callb
 export const CLIENT_ID = __ENV.CLIENT_ID || 'smoke-client';
 
 // Shared password for every generated load user.
-const PASSWORD = __ENV.PASSWORD || 'LoadTest1!';
+export const PASSWORD = __ENV.PASSWORD || 'LoadTest1!';
 
 export const JSON_HEADERS = { 'Content-Type': 'application/json' };
 export const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
