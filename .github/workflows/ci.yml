@@ -52,9 +52,9 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
-  # Runs the backend-parity tests against a real MongoDB. The repo tests skip
-  # the mongo-gated cases unless MONGO_* is set (see requireMongo), so this job
-  # is where they actually execute.
+  # Runs the backend-parity tests against a real MongoDB + Redis. The repo tests
+  # skip the gated cases unless MONGO_* / REDIS_* is set (see requireMongo,
+  # requireRedis), so this job is where they actually execute.
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -71,6 +71,13 @@ jobs:
         options: >-
           --health-cmd "mongosh --quiet -u test -p test --eval 'db.adminCommand({ ping: 1 })'"
           --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Ensure node binary (act only)
@@ -85,7 +92,8 @@ jobs:
           MONGO_USER: test
           MONGO_PASSWORD: test
           MONGO_AUTH_SOURCE: admin
-        run: go test ./... -run Mongo
+          REDIS_ADDR: localhost:6379
+        run: go test ./... -run 'Mongo|RedisCache_Contract'
 
   e2e:
     runs-on: ubuntu-latest
