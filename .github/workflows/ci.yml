@@ -52,6 +52,41 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  # Runs the backend-parity tests against a real MongoDB. The repo tests skip
+  # the mongo-gated cases unless MONGO_* is set (see requireMongo), so this job
+  # is where they actually execute.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:7
+        # The Mongo config requires credentials; enable root auth and mirror
+        # it in the test env below.
+        env:
+          MONGO_INITDB_ROOT_USERNAME: test
+          MONGO_INITDB_ROOT_PASSWORD: test
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet -u test -p test --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Ensure node binary (act only)
+        if: ${{ env.ACT == 'true' }}
+        run: command -v node || apt-get install -y nodejs
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Run integration tests
+        env:
+          MONGO_HOST: localhost:27017
+          MONGO_USER: test
+          MONGO_PASSWORD: test
+          MONGO_AUTH_SOURCE: admin
+        run: go test ./... -run Mongo
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
