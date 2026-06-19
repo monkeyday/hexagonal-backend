@@ -71,6 +71,7 @@ func (e *Engine) start(modules []HTTPModule, args Args) error {
 }
 
 func (e *Engine) setMiddlewares(args Args) {
+	e.Use(middleware.RequestID())
 	e.Use(middleware.Logger())
 	e.Use(middleware.SecurityHeaders())
 	e.Use(middleware.Cors(args.Server.CorsOrigins))

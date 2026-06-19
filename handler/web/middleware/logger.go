@@ -13,6 +13,7 @@ func Logger() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		base := log.Logger
 		logger := base.With().
+			Str(RequestIDKey, ctx.GetString(RequestIDKey)).
 			Str("method", ctx.Request.Method).
 			Str("host", ctx.Request.Host).
 			Str("path", ctx.Request.URL.Path).
