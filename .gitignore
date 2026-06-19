@@ -30,3 +30,12 @@ docs/*.md
 *.test
 *.out
 vendor/
+
+# Build output
+/backend
+/bin/
+
+# Tooling artifacts
+.playwright-mcp/
+ci.env
+/memory/

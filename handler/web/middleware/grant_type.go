@@ -18,10 +18,7 @@ const maxGrantTypeBodyBytes = 1 << 20
 
 func GrantType(allowed []string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		gt := ctx.PostForm(GrantTypeKey)
-		if gt == "" {
-			gt = jsonGrantType(ctx)
-		}
+		gt := grantType(ctx)
 		if gt == "" {
 			res := responder.NewHTTPResponder(ctx)
 			res.Response(nil, coreerror.New(coreerror.BadRequest, http.StatusBadRequest, "grant_type is required"), false)
@@ -39,6 +36,15 @@ func GrantType(allowed []string) gin.HandlerFunc {
 	}
 }
 
+func grantType(ctx *gin.Context) string {
+	if gt := ctx.PostForm(GrantTypeKey); gt != "" {
+		return gt
+	}
+	return jsonGrantType(ctx)
+}
+
+// jsonGrantType reads grant_type from an application/json body, restoring the
+// body afterward so downstream handlers can re-read it.
 func jsonGrantType(ctx *gin.Context) string {
 	contentType, _, err := mime.ParseMediaType(ctx.GetHeader("Content-Type"))
 	if err != nil || contentType != "application/json" {

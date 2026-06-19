@@ -43,6 +43,7 @@ func (ro *Router) registerPublicRoutes(r *gin.Engine) {
 	r.GET("/sign-in", webHandler.HandleHTML[query.GetSignInQuery](ro.module))
 	r.GET("/sign-up", signUp())
 	r.GET("/authorize", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
+	// endpoints of Keycloak for integrating with Supabase
 	kc := r.Group("/protocol/openid-connect")
 	kc.GET("/auth", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
 	kc.GET("/certs", middleware.CachePublic(discoveryCacheTTL), webHandler.Handle[query.GetJWKSQuery](ro.module))

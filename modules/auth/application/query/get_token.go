@@ -25,7 +25,7 @@ type GetTokenQuery struct {
 
 // GetTokenUseCase implements the password grant (grant_type=password).
 // Intentional: kept for internal/trusted service use where the authorization code flow is not applicable.
-// Deprecated in OAuth 2.1; do not expose to public or browser-based clients.
+// Deprecated in OAuth 2.1; do not expose it to public or browser-based clients.
 type GetTokenUseCase struct {
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
