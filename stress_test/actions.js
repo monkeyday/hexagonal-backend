@@ -149,5 +149,11 @@ export function doMixedIteration(s) {
   else doDiscovery();
 }
 
-/** Endpoint tags exercised by the mixed workload, for threshold building. */
+/** Endpoint tags exercised by the mixed workload (flat threshold, e.g. spike). */
 export const MIXED_ENDPOINTS = ['userinfo', 'refresh', 'token_code', 'discovery'];
+
+// Per-endpoint p95 guardrails (ms) for the steady mixed workload, ~6x the
+// baseline p95 (see stress_test/README.md). Generous on purpose: these catch
+// gross regressions, not tight SLOs, and tolerate slower hardware until a
+// production-representative baseline is established.
+export const MIXED_THRESHOLDS = { userinfo: 150, refresh: 300, token_code: 300, discovery: 150 };

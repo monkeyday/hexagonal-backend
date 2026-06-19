@@ -23,7 +23,7 @@ const REUSE_EVERY = Number(__ENV.REUSE_EVERY || 5);
 
 export const options = {
   scenarios: { refresh: rampingScenario(VUS, DURATION) },
-  thresholds: perEndpointThresholds(['password', 'refresh', 'refresh_reuse'], 800),
+  thresholds: perEndpointThresholds({ password: 500, refresh: 300, refresh_reuse: 300 }),
 };
 
 const session = newSession();

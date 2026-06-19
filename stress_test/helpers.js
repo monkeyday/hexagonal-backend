@@ -51,19 +51,27 @@ export function rampingScenario(target, hold = '1m', rampUp = '15s', rampDown = 
 }
 
 /**
- * Build per-endpoint latency + failure thresholds.
- * Pass endpoint tag names; requests tagged `{ endpoint: name }` are measured
- * independently. Example: perEndpointThresholds(['userinfo', 'refresh']).
+ * Build per-endpoint latency + failure thresholds. Requests tagged
+ * `{ endpoint: name }` are measured independently. `endpoints` is either:
+ *   - an array of names, all sharing the `p95` default, or
+ *   - an object mapping name -> per-endpoint p95 ms (calibrated guardrails).
  *
- * The per-script p95 default can be overridden globally with P95_MAX, e.g. in
- * CI where latency baselines are not yet calibrated and only correctness
- * (checks + http_req_failed) should gate the run.
+ * Examples:
+ *   perEndpointThresholds(['userinfo'], 150)
+ *   perEndpointThresholds({ refresh: 300, password: 500 })
+ *
+ * P95_MAX overrides every per-endpoint limit, e.g. in CI where latency
+ * baselines are not yet calibrated for the runner and only correctness
+ * (checks + http_req_failed) should gate the run. See stress_test/README.md.
  */
 export function perEndpointThresholds(endpoints, p95 = 800) {
-  const limit = Number(__ENV.P95_MAX || p95);
+  const override = __ENV.P95_MAX ? Number(__ENV.P95_MAX) : null;
+  const pairs = Array.isArray(endpoints)
+    ? endpoints.map((name) => [name, p95])
+    : Object.entries(endpoints);
   const t = { http_req_failed: ['rate<0.01'] };
-  for (const name of endpoints) {
-    t[`http_req_duration{endpoint:${name}}`] = [`p(95)<${limit}`];
+  for (const [name, limit] of pairs) {
+    t[`http_req_duration{endpoint:${name}}`] = [`p(95)<${override ?? limit}`];
   }
   return t;
 }

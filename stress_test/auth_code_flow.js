@@ -20,7 +20,7 @@ const DURATION = __ENV.DURATION || '1m';
 
 export const options = {
   scenarios: { auth_code: rampingScenario(VUS, DURATION) },
-  thresholds: perEndpointThresholds(['authorize', 'sign_in', 'token_code'], 1000),
+  thresholds: perEndpointThresholds({ authorize: 300, sign_in: 500, token_code: 300 }),
 };
 
 const session = newSession();

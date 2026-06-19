@@ -18,7 +18,7 @@ const DURATION = __ENV.DURATION || '1m';
 export const options = {
   scenarios: { userinfo: rampingScenario(VUS, DURATION) },
   // userinfo is a cheap read; hold it to a tighter p95 than write paths.
-  thresholds: perEndpointThresholds(['userinfo'], 300),
+  thresholds: perEndpointThresholds({ userinfo: 150 }),
 };
 
 const session = newSession();

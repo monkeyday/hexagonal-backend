@@ -11,14 +11,14 @@
  *       k6 run -e VUS=80 -e DURATION=3m stress_test/mixed.js
  */
 import { rampingScenario, perEndpointThresholds } from './helpers.js';
-import { newSession, doMixedIteration, MIXED_ENDPOINTS } from './actions.js';
+import { newSession, doMixedIteration, MIXED_THRESHOLDS } from './actions.js';
 
 const VUS = Number(__ENV.VUS || 50);
 const DURATION = __ENV.DURATION || '2m';
 
 export const options = {
   scenarios: { mixed: rampingScenario(VUS, DURATION) },
-  thresholds: perEndpointThresholds(MIXED_ENDPOINTS, 1000),
+  thresholds: perEndpointThresholds(MIXED_THRESHOLDS),
 };
 
 const session = newSession();

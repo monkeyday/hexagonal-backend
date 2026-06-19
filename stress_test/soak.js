@@ -12,7 +12,7 @@
  *       k6 run -e VUS=40 -e DURATION=30m stress_test/soak.js
  */
 import { perEndpointThresholds } from './helpers.js';
-import { newSession, doMixedIteration, MIXED_ENDPOINTS } from './actions.js';
+import { newSession, doMixedIteration, MIXED_THRESHOLDS } from './actions.js';
 
 const VUS = Number(__ENV.VUS || 30);
 const DURATION = __ENV.DURATION || '15m';
@@ -25,7 +25,7 @@ export const options = {
       duration: DURATION,
     },
   },
-  thresholds: perEndpointThresholds(MIXED_ENDPOINTS, 1000),
+  thresholds: perEndpointThresholds(MIXED_THRESHOLDS),
 };
 
 const session = newSession();
