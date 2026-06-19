@@ -46,7 +46,7 @@ panel; assert against that panel unless noted.
 | 3 | Click **UserInfo** | `:3000/` | response has `sub`, `preferred_username`, `nickname`, `email` |
 | 4 | Click **Update Profile** → set Nickname `Updated Nick` → Save | `:3000/update-profile` | response `nickname` = `Updated Nick` (immediate echo) |
 | 5 | Click **UserInfo** again | `:3000/` | `nickname` = `Updated Nick` — re-reads through the userinfo endpoint, proving the update **persisted server-side**, not just echoed back |
-| 6 | Click **Introspect Token** | `:3000/` | **expected** `{"msg":"invalid_client","err_code":10023}` — see note |
+| 6 | Click **Introspect Token** | `:3000/` | **expected** `{"error":"invalid_client","error_description":"invalid_client"}` (RFC 6749 §5.2) — see note |
 | 7 | Click **Refresh Token** | `:3000/` | new token JSON; `refresh_token` differs from step 2 (rotation) |
 | 8 | Click **Revoke Token** | `:3000/` | returns to the logged-out home (Login button visible) |
 | 9 | Click **Login with IdP**, sign in again, then click **Logout** | `:3000/` | after Logout, logged-out home is shown |
@@ -73,7 +73,7 @@ Token can also be pulled headlessly via `curl :8025/api/v1/message/latest` (the
 
 ## Notes
 
-- **Step 5 is a pass, not a failure.** `/oidc/introspect` requires an
+- **Step 6 is a pass, not a failure.** `/oidc/introspect` requires an
   authenticated *confidential* client (RFC 7662 §2.1). `cmd/backend` is the
   *public* client `my_client2` and holds no secret, so the IdP correctly rejects
   it with `invalid_client`. It would only succeed if `cmd/backend` were
