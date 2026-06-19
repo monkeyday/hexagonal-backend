@@ -303,7 +303,9 @@ paths:
         to `redirect_uri?code=<code>&state=<state>`.
 
         Requires the `auth_session` cookie set by `GET /authorize`.
-        Rate-limited to 5 req/s with a burst of 10 per client IP.
+        Subject to the global per-IP rate limiter (`RATE_LIMIT_PER_MIN` requests
+        per `RATE_LIMIT_WINDOW`, disabled when unset/0); this path fails closed
+        (rejects) if the rate-limit cache is unavailable.
       tags: [Auth Code Flow]
       parameters:
         - in: cookie
@@ -391,7 +393,7 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 msg: email already exists
-                err_code: 10016
+                err_code: 10009
 
   # ── Authorize ─────────────────────────────────────────────────────────────────
   /authorize:
@@ -494,7 +496,9 @@ paths:
         | `password`            | Credential-based token issuance |
         | *(anything else)*     | 400 unsupported grant type      |
 
-        Rate-limited to 5 req/s with a burst of 10 per client IP.
+        Subject to the global per-IP rate limiter (`RATE_LIMIT_PER_MIN` requests
+        per `RATE_LIMIT_WINDOW`, disabled when unset/0); this path fails closed
+        (rejects) if the rate-limit cache is unavailable.
       tags: [Tokens]
       requestBody:
         required: true
@@ -946,7 +950,7 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 msg: email already exists
-                err_code: 10016
+                err_code: 10009
 
   # ── Password reset ───────────────────────────────────────────────────────────
   /forgot-password:
@@ -1005,7 +1009,7 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 msg: password too weak
-                err_code: 10024
+                err_code: 10017
         '401':
           description: Reset token has expired.
           content:
@@ -1014,7 +1018,7 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 msg: password reset token has expired
-                err_code: 10022
+                err_code: 10015
         '404':
           description: Reset token not found.
           content:
@@ -1023,7 +1027,7 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               example:
                 msg: password reset token not found
-                err_code: 10023
+                err_code: 10016
 
   # ── Metrics ───────────────────────────────────────────────────────────────────
   /debug/vars:
