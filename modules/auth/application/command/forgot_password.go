@@ -42,8 +42,9 @@ func (uc *ForgotPasswordUseCase) Execute(ctx context.Context, cmd any) (any, err
 
 	updated := *user
 	updated.SetPasswordResetToken(token, entity.PasswordResetTokenTTL)
-	// TODO: replace with transactional outbox — save token and outbox message atomically so
-	// they succeed and fail together.
+	// TODO(WS11): replace with a transactional outbox — save the reset token and an
+	// outbox message atomically so they succeed and fail together; a relay/worker then
+	// delivers the email. Deferred to the WS11 task module (Redis queue + worker).
 	if err := uc.userRepo.Save(ctx, &updated); err != nil {
 		log.Error().Err(err).Msg("forgot_password: failed to save reset token")
 		return nil, nil
