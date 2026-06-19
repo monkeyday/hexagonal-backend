@@ -71,9 +71,9 @@ func (m *Module) MapHTTPError(err error) error {
 		return err
 	}
 	if hs, ok := err.(interface{ HTTPStatus() int }); ok && hs.HTTPStatus() != 0 {
-		return coreerror.NewErrorStruct(e.Code(), hs.HTTPStatus(), err)
+		return autherrors.HTTPError{ErrorStruct: coreerror.NewErrorStruct(e.Code(), hs.HTTPStatus(), err)}
 	}
-	return coreerror.NewErrorStruct(e.Code(), httpStatusMapper(e.Code()), err)
+	return autherrors.HTTPError{ErrorStruct: coreerror.NewErrorStruct(e.Code(), httpStatusMapper(e.Code()), err)}
 }
 
 func (m *Module) registerUseCases(deps define.Dependencies) {

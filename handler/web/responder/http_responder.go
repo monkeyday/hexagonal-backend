@@ -133,6 +133,10 @@ func (r *HTTPResponder) fail(err error, isHTML bool) {
 		})
 		return
 	}
+	if r.oauth2Format() {
+		r.failOAuth2(err)
+		return
+	}
 	if e, ok := err.(HTTPError); ok && e.HTTPStatus() != 0 {
 		r.c.JSON(e.HTTPStatus(), &HTTPResponse{
 			Msg:     e.Error(),
@@ -151,4 +155,39 @@ func (r *HTTPResponder) fail(err error, isHTML bool) {
 		Msg:     "internal server error",
 		ErrCode: 90000,
 	})
+}
+
+// oauth2ErrorBody is the RFC 6749 §5.2 error response shape.
+type oauth2ErrorBody struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description,omitempty"`
+}
+
+func (r *HTTPResponder) oauth2Format() bool {
+	v, ok := r.c.Get(web.OAuth2ErrorFormatKey)
+	b, _ := v.(bool)
+	return ok && b
+}
+
+// failOAuth2 renders an RFC 6749 §5.2 error body. The error code comes from the
+// error when it carries one (web.OAuth2Error), defaulting to invalid_request.
+// An invalid_client failure additionally gets a WWW-Authenticate challenge
+// (RFC 6749 §5.2).
+func (r *HTTPResponder) failOAuth2(err error) {
+	status := http.StatusBadRequest
+	if e, ok := err.(interface{ HTTPStatus() int }); ok && e.HTTPStatus() != 0 {
+		status = e.HTTPStatus()
+	}
+	code := web.OAuth2InvalidRequest
+	desc := err.Error()
+	if e, ok := err.(web.OAuth2Error); ok {
+		if c := e.OAuth2Code(); c != "" {
+			code = c
+		}
+		desc = e.OAuth2Description()
+	}
+	if code == web.OAuth2InvalidClient && status == http.StatusUnauthorized {
+		r.c.Header("WWW-Authenticate", `Basic realm="oauth2"`)
+	}
+	r.c.JSON(status, oauth2ErrorBody{Error: code, ErrorDescription: desc})
 }

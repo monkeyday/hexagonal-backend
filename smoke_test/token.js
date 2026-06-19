@@ -127,8 +127,8 @@ export default function () {
       { headers: JSON_HEADERS, responseCallback: expectedStatuses(400) },
     );
     check(res, {
-      'status 400':     (r) => r.status === 400,
-      'has err_code':   (r) => r.json('err_code') > 0,
+      'status 400':                       (r) => r.status === 400,
+      'RFC 6749 error unsupported_grant_type': (r) => r.json('error') === 'unsupported_grant_type',
     });
   });
 }

@@ -6,7 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	coreerror "sc/core/error"
+	"sc/core/web"
 	"sc/handler/web/responder"
 	"slices"
 
@@ -21,13 +21,13 @@ func GrantType(allowed []string) gin.HandlerFunc {
 		gt := grantType(ctx)
 		if gt == "" {
 			res := responder.NewHTTPResponder(ctx)
-			res.Response(nil, coreerror.New(coreerror.BadRequest, http.StatusBadRequest, "grant_type is required"), false)
+			res.Response(nil, web.NewOAuth2Error(http.StatusBadRequest, web.OAuth2InvalidRequest, "grant_type is required"), false)
 			ctx.Abort()
 			return
 		}
 		if len(allowed) > 0 && !slices.Contains(allowed, gt) {
 			res := responder.NewHTTPResponder(ctx)
-			res.Response(nil, coreerror.New(coreerror.BadRequest, http.StatusBadRequest, "unsupported grant_type"), false)
+			res.Response(nil, web.NewOAuth2Error(http.StatusBadRequest, web.OAuth2UnsupportedGrantType, "unsupported grant_type"), false)
 			ctx.Abort()
 			return
 		}
