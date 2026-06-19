@@ -20,15 +20,16 @@ export default function () {
     'valid request: status 200': (r) => r.status === 200,
   });
 
-  // ── Unsupported response_type — expects 400 ──────────────────────────────────
+  // ── Unsupported response_type — RFC 6749 §4.1.2.1 error redirect ─────────────
   const unsupported = http.get(
     `${BASE_URL}/authorize?response_type=token&client_id=smoke-client` +
     `&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=openid%20email`,
-    { responseCallback: expectedStatuses(400) },
+    { redirects: 0, responseCallback: expectedStatuses(302) },
   );
   check(unsupported, {
-    'unsupported response_type: status 400': (r) => r.status === 400,
-    'unsupported response_type: err_code':   (r) => r.json('err_code') === 10013,
+    'unsupported response_type: status 302':        (r) => r.status === 302,
+    'unsupported response_type: error in redirect': (r) =>
+      (r.headers['Location'] || '').includes('error=unsupported_response_type'),
   });
 
   // ── Missing response_type — expects 400 ─────────────────────────────────────

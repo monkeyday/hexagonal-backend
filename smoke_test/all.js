@@ -87,11 +87,12 @@ export default function (tokens) {
     const bad = http.get(
       `${BASE_URL}/authorize?response_type=token&client_id=smoke-client` +
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=openid%20email`,
-      { responseCallback: expectedStatuses(400) },
+      { redirects: 0, responseCallback: expectedStatuses(302) },
     );
     check(bad, {
-      'bad response_type: status 400': (r) => r.status === 400,
-      'bad response_type: err_code':   (r) => r.json('err_code') === 10013,
+      'bad response_type: status 302':        (r) => r.status === 302,
+      'bad response_type: error in redirect': (r) =>
+        (r.headers['Location'] || '').includes('error=unsupported_response_type'),
     });
   });
 

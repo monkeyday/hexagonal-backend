@@ -2,6 +2,7 @@ package define
 
 import (
 	"net/http"
+	"net/url"
 	"sc/core/web"
 	"sc/modules/auth/domain/entity"
 )
@@ -83,6 +84,33 @@ func (r *LogoutResponse) URL() string {
 
 func (r *LogoutResponse) Cookies() []web.Cookie {
 	return []web.Cookie{{Name: CookieRefreshToken, Value: "", MaxAge: -1}}
+}
+
+// AuthorizeErrorRedirect carries an RFC 6749 §4.1.2.1 error back to the client's
+// registered redirect_uri (error + state in the query). It is only used once the
+// redirect_uri has been validated against the client registry.
+type AuthorizeErrorRedirect struct {
+	redirectURI string
+	errCode     string
+	state       *string
+}
+
+func NewAuthorizeErrorRedirect(redirectURI, errCode string, state *string) *AuthorizeErrorRedirect {
+	return &AuthorizeErrorRedirect{redirectURI: redirectURI, errCode: errCode, state: state}
+}
+
+func (r *AuthorizeErrorRedirect) URL() string {
+	u, err := url.Parse(r.redirectURI)
+	if err != nil {
+		return r.redirectURI
+	}
+	q := u.Query()
+	q.Set("error", r.errCode)
+	if r.state != nil {
+		q.Set("state", *r.state)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 type GetAuthorizeResponse struct {
