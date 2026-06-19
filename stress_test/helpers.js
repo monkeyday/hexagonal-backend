@@ -33,6 +33,24 @@ export function vuEmail() {
 }
 
 /**
+ * Standard ramping-vus scenario: ramp up, hold at target, ramp down.
+ * Used by the steady-load scenarios (refresh/userinfo/auth_code/mixed);
+ * spike and soak define their own stage shapes.
+ */
+export function rampingScenario(target, hold = '1m', rampUp = '15s', rampDown = '10s') {
+  return {
+    executor: 'ramping-vus',
+    startVUs: 0,
+    stages: [
+      { duration: rampUp, target },
+      { duration: hold, target },
+      { duration: rampDown, target: 0 },
+    ],
+    gracefulRampDown: '5s',
+  };
+}
+
+/**
  * Build per-endpoint latency + failure thresholds.
  * Pass endpoint tag names; requests tagged `{ endpoint: name }` are measured
  * independently. Example: perEndpointThresholds(['userinfo', 'refresh']).
