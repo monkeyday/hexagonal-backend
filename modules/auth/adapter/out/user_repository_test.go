@@ -1,15 +1,13 @@
 package adapter
 
 import (
-	"context"
-	"errors"
 	"testing"
 	"time"
 
 	crypto "sc/core/crypto"
-	coreerror "sc/core/error"
 	filerepo "sc/infrastructure/repository/file"
 	"sc/modules/auth/domain/entity"
+	"sc/modules/auth/port"
 )
 
 var (
@@ -218,154 +216,11 @@ func TestToDocToEntityRoundtrip(t *testing.T) {
 }
 
 func TestFileUserRepository(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("CreateUser success and FindByEmail", func(t *testing.T) {
+	runUserRepositoryContract(t, func(t *testing.T) port.UserRepository {
 		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
 		if err != nil {
 			t.Fatalf("NewUserRepository: %v", err)
 		}
-		u := newUserForTest("u1", "a@example.com")
-		if err := repo.CreateUser(ctx, u); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-		found, err := repo.FindByEmail(ctx, entity.DefaultTenantID, u.Email)
-		if err != nil {
-			t.Fatalf("FindByEmail: %v", err)
-		}
-		if found.ID != u.ID {
-			t.Errorf("ID: got %q, want %q", found.ID, u.ID)
-		}
-	})
-
-	t.Run("CreateUser duplicate email returns ErrConflict", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		u1 := newUserForTest("u1", "dup@example.com")
-		u2 := newUserForTest("u2", "dup@example.com")
-		if err := repo.CreateUser(ctx, u1); err != nil {
-			t.Fatalf("CreateUser u1: %v", err)
-		}
-		if err := repo.CreateUser(ctx, u2); !errors.Is(err, coreerror.ErrConflict) {
-			t.Errorf("expected ErrConflict, got %v", err)
-		}
-	})
-
-	t.Run("FindByEmail not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		_, err = repo.FindByEmail(ctx, entity.DefaultTenantID, "missing@example.com")
-		if !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("FindByID found and not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		u := newUserForTest("id-user-1", "b@example.com")
-		if err := repo.CreateUser(ctx, u); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-		found, err := repo.FindByID(ctx, u.ID)
-		if err != nil {
-			t.Fatalf("FindByID: %v", err)
-		}
-		if found.Email != u.Email {
-			t.Errorf("Email: got %q, want %q", found.Email, u.Email)
-		}
-		_, err = repo.FindByID(ctx, "nonexistent-id")
-		if !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("Save updates existing user", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		u := newUserForTest("save-u1", "save@example.com")
-		if err := repo.CreateUser(ctx, u); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-		u.Nickname = "updated-nick"
-		if err := repo.Save(ctx, u); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		found, err := repo.FindByEmail(ctx, entity.DefaultTenantID, u.Email)
-		if err != nil {
-			t.Fatalf("FindByEmail after Save: %v", err)
-		}
-		if found.Nickname != "updated-nick" {
-			t.Errorf("Nickname: got %q, want updated-nick", found.Nickname)
-		}
-	})
-
-	t.Run("FindByPasswordResetTokenHash found and not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		u := newUserForTest("reset-u1", "reset@example.com")
-		hash := "sha256-reset-hash"
-		u.PasswordResetTokenHash = &hash
-		if err := repo.CreateUser(ctx, u); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-		found, err := repo.FindByPasswordResetTokenHash(ctx, hash)
-		if err != nil {
-			t.Fatalf("FindByPasswordResetTokenHash: %v", err)
-		}
-		if found.ID != u.ID {
-			t.Errorf("ID: got %q, want %q", found.ID, u.ID)
-		}
-		_, err = repo.FindByPasswordResetTokenHash(ctx, "wrong-hash")
-		if !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("UpdateByPasswordResetTokenHash success", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		u := newUserForTest("upd-u1", "upd@example.com")
-		hash := "reset-hash-abc"
-		u.PasswordResetTokenHash = &hash
-		if err := repo.CreateUser(ctx, u); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-		if err := repo.UpdateByPasswordResetTokenHash(ctx, hash, func(u *entity.User) error {
-			u.Nickname = "changed"
-			return nil
-		}); err != nil {
-			t.Fatalf("UpdateByPasswordResetTokenHash: %v", err)
-		}
-		found, err := repo.FindByPasswordResetTokenHash(ctx, hash)
-		if err != nil {
-			t.Fatalf("FindByPasswordResetTokenHash after update: %v", err)
-		}
-		if found.Nickname != "changed" {
-			t.Errorf("Nickname: got %q, want changed", found.Nickname)
-		}
-	})
-
-	t.Run("UpdateByPasswordResetTokenHash not found", func(t *testing.T) {
-		repo, err := NewUserRepository(newUserFileStore(t), testCipher(t))
-		if err != nil {
-			t.Fatalf("NewUserRepository: %v", err)
-		}
-		err = repo.UpdateByPasswordResetTokenHash(ctx, "nonexistent-hash", func(*entity.User) error { return nil })
-		if !errors.Is(err, coreerror.ErrNotFound) {
-			t.Errorf("expected ErrNotFound, got %v", err)
-		}
+		return repo
 	})
 }
