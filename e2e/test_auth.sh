@@ -166,6 +166,30 @@ check_status "GET /.well-known/jwks.json" "200" "$STATUS"
 check_json   "JWKS response" "$BODY"
 check_field  "JWKS" "$BODY" "keys"
 
+# ── RFC 6749 error contract ─────────────────────────────────────────────────────
+# Negative paths for the RFC 6749 error model: the token endpoint returns a §5.2
+# JSON body ({"error": ...}); /authorize returns a §4.1.2.1 error redirect once
+# the client + redirect_uri are valid.
+
+section "RFC 6749 errors — token endpoint (§5.2 body)"
+split_resp "$(do_req "$BASE_URL/token" -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials")"
+check_status "POST /token (unsupported grant) → 400" "400" "$STATUS"
+check_field  "token error" "$BODY" "error" "unsupported_grant_type"
+
+section "RFC 6749 errors — authorize error redirect (§4.1.2.1)"
+AUTHZ_ERR_RESP=$(curl -si --max-redirs 0 --max-time 10 \
+  "$BASE_URL/authorize?response_type=token&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&scope=openid+email+profile&state=xyz" 2>/dev/null)
+AUTHZ_ERR_STATUS=$(echo "$AUTHZ_ERR_RESP" | head -1 | awk '{print $2}')
+AUTHZ_ERR_LOC=$(echo "$AUTHZ_ERR_RESP" | grep -i '^location:' | tr -d '\r' | sed 's/^[Ll]ocation: //')
+check_status "GET /authorize (bad response_type) → 302" "302" "$AUTHZ_ERR_STATUS"
+if printf '%s' "$AUTHZ_ERR_LOC" | grep -q 'error=unsupported_response_type'; then
+  pass "authorize error redirect carries error=unsupported_response_type"
+else
+  fail "authorize error redirect missing error param (Location: $AUTHZ_ERR_LOC)"
+fi
+
 # ── Sign up ───────────────────────────────────────────────────────────────────
 
 section "Sign up"
