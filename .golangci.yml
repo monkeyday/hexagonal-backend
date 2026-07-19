@@ -1,0 +1,50 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - gosec
+  exclusions:
+    rules:
+      - path: 'cmd/backend/'
+        linters: [errcheck, gosec]
+      - path: '_test\.go'
+        linters: [errcheck, gosec]
+      - text: '\.Close` is not checked'
+        linters: [errcheck]
+      - text: 'os\.Remove` is not checked'
+        linters: [errcheck]
+      - text: 'reflect\.Ptr should be inlined'
+        linters: [govet]
+      # G304 (file inclusion via variable): paths come from operator config,
+      # not user input — the file repository's storage path and the JWT key
+      # file paths. Scoped per-file so new G304s elsewhere are still caught.
+      - path: 'infrastructure/repository/file/file_repository\.go'
+        text: 'G304'
+        linters: [gosec]
+      - path: 'infrastructure/jwt/jwt_service\.go'
+        text: 'G304'
+        linters: [gosec]
+      - path: 'core/validator/'
+        text: 'G101'
+        linters: [gosec]
+      - path: 'modules/auth/application/define/metrics\.go'
+        text: 'G101'
+        linters: [gosec]
+      # cache_keys.go holds cache-key format strings, not credentials; G101
+      # false-positives on "Password" in ForgotPasswordRateKey's name.
+      - path: 'modules/auth/application/define/cache_keys\.go'
+        text: 'G101'
+        linters: [gosec]
+      - path: 'infrastructure/repository/file/file_repository\.go'
+        text: 'G104'
+        linters: [gosec]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

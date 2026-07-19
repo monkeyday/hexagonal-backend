@@ -1,0 +1,283 @@
+package middleware
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	coreerror "sc/core/error"
+	corejwt "sc/core/jwt"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+// mockJwtService implements TokenParser for auth middleware tests.
+type mockJwtService struct {
+	claims   *corejwt.Claims
+	parseErr error
+}
+
+func (m *mockJwtService) ParseJWT(_ string) (*corejwt.Claims, error) {
+	return m.claims, m.parseErr
+}
+
+// mockRevocationChecker implements RevocationChecker for auth middleware tests.
+type mockRevocationChecker struct {
+	revoked map[string]bool
+	err     error // if set, IsRevoked returns this error
+}
+
+func newMockRevocationChecker(revokedJTIs ...string) *mockRevocationChecker {
+	m := &mockRevocationChecker{revoked: make(map[string]bool)}
+	for _, jti := range revokedJTIs {
+		m.revoked[jti] = true
+	}
+	return m
+}
+
+func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	return m.revoked[jti], nil
+}
+
+func newExtractTokenRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/logout", ExtractAccessToken(), func(c *gin.Context) {
+		token, exists := c.Get(TokenKey)
+		c.JSON(http.StatusOK, gin.H{"token": token, "exists": exists})
+	})
+	return r
+}
+
+func TestExtractAccessToken(t *testing.T) {
+	tests := []struct {
+		name           string
+		authHeader     string
+		wantTokenSet   bool
+		wantTokenValue string
+	}{
+		{
+			name:           "valid Bearer token — sets token in context",
+			authHeader:     "Bearer my-access-token",
+			wantTokenSet:   true,
+			wantTokenValue: "my-access-token",
+		},
+		{
+			name:           "lowercase bearer — sets token in context",
+			authHeader:     "bearer my-access-token",
+			wantTokenSet:   true,
+			wantTokenValue: "my-access-token",
+		},
+		{
+			name:           "uppercase BEARER — sets token in context",
+			authHeader:     "BEARER my-access-token",
+			wantTokenSet:   true,
+			wantTokenValue: "my-access-token",
+		},
+		{
+			name:           "extra whitespace after scheme — token trimmed and set",
+			authHeader:     "Bearer   my-access-token",
+			wantTokenSet:   true,
+			wantTokenValue: "my-access-token",
+		},
+		{
+			name:         "no Authorization header — passes through, no token set",
+			authHeader:   "",
+			wantTokenSet: false,
+		},
+		{
+			name:         "Bearer with empty token — passes through, no token set",
+			authHeader:   "Bearer ",
+			wantTokenSet: false,
+		},
+		{
+			name:         "wrong scheme — passes through, no token set",
+			authHeader:   "Basic dXNlcjpwYXNz",
+			wantTokenSet: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newExtractTokenRouter()
+			req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("ExtractAccessToken should never reject — got status %d", w.Code)
+			}
+			if tc.wantTokenSet {
+				assertBodyContains(t, w.Body.Bytes(), tc.wantTokenValue)
+			} else {
+				assertBodyContains(t, w.Body.Bytes(), `"exists":false`)
+			}
+		})
+	}
+}
+
+func newAuthRouter(svc TokenParser, rev *mockRevocationChecker) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/protected", Authenticate(svc, rev), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"user_id":      c.GetString(UserIdKey),
+			"access_token": c.GetString(TokenKey),
+		})
+	})
+	return r
+}
+
+func TestAuthenticate(t *testing.T) {
+	exp := new(time.Now().Add(time.Hour))
+	validClaims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "valid-jti"}
+	noJTIClaims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer"}
+	revokedClaims := &corejwt.Claims{
+		Subject:   "user-42",
+		Issuer:    "test-issuer",
+		ID:        "revoked-jti",
+		ExpiresAt: exp,
+	}
+
+	tests := []struct {
+		name        string
+		authHeader  string
+		svc         *mockJwtService
+		rev         *mockRevocationChecker
+		wantStatus  int
+		wantErrCode coreerror.ErrCode
+		wantUserID  string
+	}{
+		{
+			name:       "valid token — sets context and passes through",
+			authHeader: "Bearer valid-token",
+			svc:        &mockJwtService{claims: validClaims},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:       "lowercase bearer — authenticates",
+			authHeader: "bearer valid-token",
+			svc:        &mockJwtService{claims: validClaims},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:       "uppercase BEARER — authenticates",
+			authHeader: "BEARER valid-token",
+			svc:        &mockJwtService{claims: validClaims},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:       "extra whitespace after scheme — token trimmed and authenticates",
+			authHeader: "Bearer   valid-token",
+			svc:        &mockJwtService{claims: validClaims},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:        "missing Authorization header — 401",
+			authHeader:  "",
+			svc:         &mockJwtService{claims: validClaims},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "header too short (no token after Bearer) — 401",
+			authHeader:  "Bearer ",
+			svc:         &mockJwtService{claims: validClaims},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "wrong scheme (Basic) — ParseJWT rejects non-JWT — 401",
+			authHeader:  "Basic dXNlcjpwYXNz",
+			svc:         &mockJwtService{parseErr: errors.New("token contains an invalid number of segments")},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "ParseJWT fails — 401",
+			authHeader:  "Bearer bad-token",
+			svc:         &mockJwtService{parseErr: errors.New("signature invalid")},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "ParseJWT returns nil claims — 401",
+			authHeader:  "Bearer nil-claims",
+			svc:         &mockJwtService{claims: nil},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "token without jti — rejected, cannot be blacklist-checked — 401",
+			authHeader:  "Bearer no-jti-token",
+			svc:         &mockJwtService{claims: noJTIClaims},
+			rev:         newMockRevocationChecker(),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "revoked JTI — 401",
+			authHeader:  "Bearer revoked-token",
+			svc:         &mockJwtService{claims: revokedClaims},
+			rev:         newMockRevocationChecker("revoked-jti"),
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:        "cache unavailable during blacklist check — fail closed 401",
+			authHeader:  "Bearer valid-token",
+			svc:         &mockJwtService{claims: revokedClaims},
+			rev:         &mockRevocationChecker{err: errors.New("redis unavailable")},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAuthRouter(tc.svc, tc.rev)
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusUnauthorized {
+				if got := w.Header().Get("WWW-Authenticate"); got != "Bearer" {
+					t.Errorf("WWW-Authenticate = %q, want %q", got, "Bearer")
+				}
+			}
+			if tc.wantErrCode != 0 {
+				assertErrCode(t, w.Body.Bytes(), tc.wantErrCode)
+			}
+			if tc.wantUserID != "" {
+				assertBodyContains(t, w.Body.Bytes(), tc.wantUserID)
+			}
+		})
+	}
+}

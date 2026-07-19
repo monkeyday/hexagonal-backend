@@ -1,0 +1,41 @@
+# Secrets
+cmd/auth/.secret/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data
+.data/
+tmp/
+ci-keys/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Internal docs
+docs/*.md
+
+# OS
+.DS_Store
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Build output
+/backend
+/bin/
+
+# Tooling artifacts
+.playwright-mcp/
+ci.env
+/memory/
