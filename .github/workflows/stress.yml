@@ -48,7 +48,7 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Ensure node binary (act only)
         if: ${{ env.ACT == 'true' }}
         run: command -v node || apt-get install -y nodejs
