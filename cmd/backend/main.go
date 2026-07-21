@@ -167,6 +167,7 @@ func setSession(w http.ResponseWriter, id string, tok tokenResponse) {
 		MaxAge:   sessionMaxAge,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -288,6 +289,7 @@ func clearSession(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -690,7 +692,7 @@ func handleResetPassword(w http.ResponseWriter, r *http.Request) {
 				<button type="submit" class="btn btn-primary">Reset Password</button>
 				<a href="/" class="btn btn-secondary">Cancel</a>
 			</div>
-		</form>`, token)))
+		</form>`, html.EscapeString(token))))
 }
 
 // formPage renders a minimal card page for the given title and body HTML.
