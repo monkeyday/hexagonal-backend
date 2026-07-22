@@ -108,8 +108,8 @@ func TestGetDiscoveryUseCase(t *testing.T) {
 		}
 	})
 
-	t.Run("token_endpoint_auth_methods_supported is exactly [none]", func(t *testing.T) {
-		want := []string{"none"}
+	t.Run("token_endpoint_auth_methods_supported is exactly [none client_secret_basic client_secret_post]", func(t *testing.T) {
+		want := []string{"none", "client_secret_basic", "client_secret_post"}
 		if !sameStringSet(doc.TokenEndpointAuthMethods, want) {
 			t.Errorf("token_endpoint_auth_methods_supported = %v, want exactly %v", doc.TokenEndpointAuthMethods, want)
 		}
