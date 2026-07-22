@@ -95,6 +95,43 @@ func TestSettingsSMTPValidation(t *testing.T) {
 	}
 }
 
+func TestEnvFilePath(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		entry        string
+		wantPath     string
+		wantExplicit bool
+	}{
+		{
+			name:         "ENV_PATH set — explicit",
+			envValue:     "/custom/.env",
+			entry:        "/app",
+			wantPath:     "/custom/.env",
+			wantExplicit: true,
+		},
+		{
+			name:         "ENV_PATH unset — implicit default",
+			envValue:     "",
+			entry:        "/app",
+			wantPath:     "/app/.env",
+			wantExplicit: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_PATH", tt.envValue)
+			gotPath, gotExplicit := envFilePath(tt.entry)
+			if gotPath != tt.wantPath {
+				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
+			}
+			if gotExplicit != tt.wantExplicit {
+				t.Errorf("explicit = %v, want %v", gotExplicit, tt.wantExplicit)
+			}
+		})
+	}
+}
+
 func TestParseClientConfig(t *testing.T) {
 	t.Run("no client and no DEV_SEED — panics (fail closed)", func(t *testing.T) {
 		t.Setenv("OAUTH_CLIENT_ID", "")
