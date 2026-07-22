@@ -251,6 +251,8 @@ jobs:
           tar -xzf trivy_0.72.0_Linux-64bit.tar.gz -C /usr/local/bin trivy
           rm trivy_0.72.0_Linux-64bit.tar.gz
       - name: Scan image
+        # --ignore-unfixed: unpatched CVEs (no upstream fix) don't fail the gate — accepted trade-off;
+        # the distroless runtime carries only 4 OS packages, and blocking on unfixable findings would freeze CI
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed auth:${{ github.sha }}
 
   secrets:
