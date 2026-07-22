@@ -52,7 +52,7 @@ func (uc *GetAuthorizeUseCase) Execute(ctx context.Context, query any) (any, err
 
 	// The client and its redirect_uri must be registered before any error may be
 	// redirected back (RFC 6749 §4.1.2.1) — an unregistered URI is reported
-	// directly so the endpoint cannot be used as an open redirector.
+	// directly, so the endpoint cannot be used as an open redirector.
 	client, err := uc.clients.FindByID(ctx, entity.DefaultTenantID, entity.ClientID(q.ClientID))
 	if err != nil {
 		return nil, err

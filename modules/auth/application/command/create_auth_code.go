@@ -89,7 +89,7 @@ func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session 
 
 	// Account lockout is checked before password validation and answered with
 	// the generic credentials error: a locked account must not become an
-	// enumeration oracle, nor confirm that a guessed password was correct.
+	// enumeration oracle nor confirm that a guessed password was correct.
 	if user != nil && user.IsLockedOut() {
 		log.Warn().Str("user_id", string(user.ID)).Msg("sign-in rejected: account locked")
 		return "", autherrors.NewErrInvalidEmailOrPassword()
