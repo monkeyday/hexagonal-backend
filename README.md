@@ -124,7 +124,7 @@ openssl rsa -in cmd/auth/.secret/private_key.pem -pubout \
 
 ### 2. Create `cmd/auth/.env`
 
-The server loads config from `cmd/auth/.env` by default (relative to `cmd/auth/main.go`). Use `ENV_PATH` to point elsewhere.
+The server loads config from `cmd/auth/.env` by default (relative to `cmd/auth/main.go`). Use `ENV_PATH` to point elsewhere. If the default file is missing, the server continues with process environment variables; only an explicitly set `ENV_PATH` must exist.
 
 ```sh
 cat > cmd/auth/.env << EOF
@@ -140,6 +140,8 @@ OAUTH_CLIENT_ID=my_client
 OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
 OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
 COOKIE_SECURE=false
+EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
 EOF
 ```
 
@@ -164,6 +166,32 @@ go run cmd/backend/main.go
 ```
 
 Client starts at **http://localhost:3000** — click "Login with IdP" to initiate the flow.
+
+---
+
+## Docker
+
+The production image is a distroless multi-stage build (`Dockerfile`). The runtime stage uses `gcr.io/distroless/static-debian12:nonroot` (non-root, no shell, only ~4 OS packages). Base images are pinned by digest. No `.env` file or private keys are baked in — all config is supplied via environment variables at `docker run` time.
+
+The CI `container` job builds the image and scans it with Trivy on every push.
+
+```sh
+docker build -t auth .
+
+docker run --rm -p 9876:9876 \
+  -v "$PWD/cmd/auth/.secret:/keys:ro" \
+  -e PORT=9876 \
+  -e PRIVATE_KEY_PATH=/keys/private_key.pem \
+  -e PUBLIC_KEY_PATH=/keys/public_key.pem \
+  -e JWT_KID=local \
+  -e JWT_ISSUER=http://localhost:9876 \
+  -e REPOSITORY_USED=file -e FILE_DIR=/tmp -e USER_FILE_PATH=user.json \
+  -e EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+  -e EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32) \
+  -e OAUTH_CLIENT_ID=my_client \
+  -e OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback \
+  auth
+```
 
 ---
 
@@ -338,7 +366,7 @@ Both are safe to delete to reset local state. They are created automatically on 
 
 | Symptom | Likely cause |
 |---|---|
-| Server panics at startup | `cmd/auth/.env` not found — check the path or set `ENV_PATH` |
+| Server panics at startup | Explicit `ENV_PATH` points to a missing file, or a required variable is missing (`OAUTH_CLIENT_ID`, `EMAIL_ENCRYPTION_KEY`, `EMAIL_BLIND_INDEX_KEY`); a missing default `cmd/auth/.env` no longer panics (process env is used) |
 | `failed to parse private key` | Key was generated with a passphrase — regenerate with `-N ""` |
 | `client redirect_uri not valid` | `client_id` matches no registered client (`OAUTH_CLIENT_ID` / `OAUTH_CLIENT_<n>_ID`), or `redirect_uri` is not in that client's `*_REDIRECT_URIS` |
 | `auth_session` cookie not sent to `/sign-in` | Cookie was blocked by `SameSite=Strict`; server correctly uses `SameSite=Lax` — check client |
@@ -352,18 +380,20 @@ Both are safe to delete to reset local state. They are created automatically on 
 
 ## Configuration
 
-All configuration is read from `cmd/auth/.env` by default, or the path set in `ENV_PATH`.
+Config is read from process environment variables, optionally supplemented by `cmd/auth/.env` (default path, optional) or the file at `ENV_PATH` (must exist when set); existing env vars always win over the file.
 
 ### Required
 
 | Variable | Example | Description |
 |---|---|---|
-| `PORT` | `:9876` | Listen address |
+| `PORT` | `:9876` or `9876` | Listen address (a bare port number is accepted) |
 | `PRIVATE_KEY_PATH` | `cmd/auth/.secret/private_key.pem` | RSA private key for JWT signing (unencrypted PEM) |
 | `PUBLIC_KEY_PATH` | `cmd/auth/.secret/public_key.pem` | RSA public key for JWT verification |
 | `JWT_KID` | `local` | Key ID embedded in JWT header |
 | `JWT_ISSUER` | `http://localhost:9876` | `iss` claim value — must match the URL clients use |
 | `REPOSITORY_USED` | `file` \| `mongo` | Storage backend |
+| `EMAIL_ENCRYPTION_KEY` | `$(openssl rand -base64 32)` | Base64-encoded 32-byte key for email-at-rest encryption (AES-256-GCM); generate with `openssl rand -base64 32` |
+| `EMAIL_BLIND_INDEX_KEY` | `$(openssl rand -base64 32)` | Base64-encoded HMAC key for email blind-index lookups; generate with `openssl rand -base64 32` |
 
 ### Storage — file (default)
 
@@ -480,3 +510,4 @@ If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is
 - Use Redis for a shared cache / session state when running multiple instances.
 - Do not commit `.env`, private keys, user stores, or refresh token stores.
 - File storage and in-memory cache are convenient defaults for local development, but are not suitable for horizontally scaled deployments.
+- Production container image defined in `Dockerfile` (distroless, nonroot, digest-pinned bases); configure entirely via environment variables — never bake `.env` or keys into the image.
