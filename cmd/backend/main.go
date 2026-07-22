@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sc/core/random"
 	"strconv"
 	"strings"
@@ -19,9 +20,20 @@ import (
 )
 
 const (
-	ListenAddr    = ":3000"
-	ListenHost    = "localhost:3000"
-	AuthServerURL = "http://localhost:9876"
+	ListenAddr = ":3000"
+	ListenHost = "localhost:3000"
+
+	ClientID          = "my_client2"
+	RedirectURI       = "http://" + ListenHost + "/callback"
+	Scope             = "openid profile email"
+	sessionCookieName = "session_id"
+	csrfTokenField    = "csrf_token"
+	sessionMaxAge     = 86400
+	refreshThreshold  = 1 * time.Minute
+)
+
+var (
+	AuthServerURL = envOr("AUTH_SERVER_URL", "http://localhost:9876")
 
 	AuthorizeEndpoint      = AuthServerURL + "/authorize"
 	TokenEndpoint          = AuthServerURL + "/token"
@@ -32,14 +44,19 @@ const (
 	UpdateProfileEndpoint  = AuthServerURL + "/api/v3/update-profile"
 	ForgotPasswordEndpoint = AuthServerURL + "/forgot-password"
 	ResetPasswordEndpoint  = AuthServerURL + "/reset-password"
-	ClientID               = "my_client2"
-	RedirectURI            = "http://" + ListenHost + "/callback"
-	Scope                  = "openid profile email"
-	sessionCookieName      = "session_id"
-	csrfTokenField         = "csrf_token"
-	sessionMaxAge          = 86400
-	refreshThreshold       = 1 * time.Minute
 )
+
+func envOr(key, fallback string) string {
+	v := strings.TrimRight(os.Getenv(key), "/")
+	if v == "" {
+		return fallback
+	}
+	if u, err := url.Parse(v); err != nil || u.Scheme == "" || u.Host == "" {
+		fmt.Printf("invalid %s: %q\n", key, v)
+		os.Exit(1)
+	}
+	return v
+}
 
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -95,6 +112,7 @@ func main() {
 
 	fmt.Printf("--- OIDC Test Tool ---\n")
 	fmt.Printf("Visit http://%s/ to start\n", ListenHost)
+	fmt.Printf("IdP: %s\n", AuthServerURL)
 	fmt.Printf("---------------------\n")
 
 	if err := http.ListenAndServe(ListenAddr, nil); err != nil {
