@@ -117,36 +117,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Generate RSA key pair
-        run: |
-          mkdir -p ci-keys
-          openssl genrsa -out ci-keys/private_key.pem 2048
-          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
-
-      - name: Write CI .env
-        run: |
-          cat > ci.env << EOF
-          PORT=:9876
-          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
-          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
-          JWT_KID=ci
-          JWT_ISSUER=http://127.0.0.1:9876
-          REPOSITORY_USED=file
-          FILE_DIR=$GITHUB_WORKSPACE/tmp
-          USER_FILE_PATH=user.json
-          OAUTH_CLIENT_ID=my_client
-          OAUTH_CLIENT_AUTH_METHOD=client_secret_basic
-          OAUTH_CLIENT_SECRET=super-secret-e2e-client-secret
-          OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
-          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
-          METRICS_ADDR=127.0.0.1:9878
-          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
-          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
-          SMTP_HOST=localhost
-          SMTP_PORT=1025
-          SMTP_FROM=noreply@auth.local
-          APP_BASE_URL=http://localhost:3000
-          EOF
+      - name: Setup auth server env
+        uses: ./.github/actions/setup-auth-server
+        with:
+          client-id: my_client
+          client-auth-method: client_secret_basic
+          client-secret: super-secret-e2e-client-secret
+          redirect-uris: http://localhost:3000/callback
+          post-logout-redirect-allowlist: http://localhost:3000
+          extra-env: |
+            SMTP_HOST=localhost
+            SMTP_PORT=1025
+            SMTP_FROM=noreply@auth.local
+            APP_BASE_URL=http://localhost:3000
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth
@@ -184,30 +167,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Generate RSA key pair
-        run: |
-          mkdir -p ci-keys
-          openssl genrsa -out ci-keys/private_key.pem 2048
-          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
-
-      - name: Write CI .env
-        run: |
-          cat > ci.env << EOF
-          PORT=:9876
-          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
-          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
-          JWT_KID=ci
-          JWT_ISSUER=http://127.0.0.1:9876
-          REPOSITORY_USED=file
-          FILE_DIR=$GITHUB_WORKSPACE/tmp
-          USER_FILE_PATH=user.json
-          OAUTH_CLIENT_ID=smoke-client
-          OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
-          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
-          METRICS_ADDR=127.0.0.1:9878
-          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
-          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
-          EOF
+      - name: Setup auth server env
+        uses: ./.github/actions/setup-auth-server
+        with:
+          client-id: smoke-client
+          redirect-uris: https://app.example.com/callback
+          post-logout-redirect-allowlist: http://localhost:3000,https://app.example.com/logged-out
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth

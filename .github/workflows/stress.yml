@@ -56,35 +56,22 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Generate RSA key pair
-        run: |
-          mkdir -p ci-keys
-          openssl genrsa -out ci-keys/private_key.pem 2048
-          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
-
-      - name: Write CI .env
-        run: |
-          cat > ci.env << EOF
-          PORT=:9876
-          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
-          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
-          JWT_KID=stress
-          JWT_ISSUER=http://127.0.0.1:9876
-          REPOSITORY_USED=mongo
-          MONGO_HOST=localhost:27017
-          MONGO_USER=stress
-          MONGO_PASSWORD=stress
-          MONGO_AUTH_SOURCE=admin
-          MONGO_DATABASE=stress
-          REDIS_ADDR=localhost:6379
-          OAUTH_CLIENT_ID=smoke-client
-          OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
-          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=https://app.example.com/logged-out
-          METRICS_ADDR=127.0.0.1:9878
-          RATE_LIMIT_PER_MIN=0
-          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
-          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
-          EOF
+      - name: Setup auth server env
+        uses: ./.github/actions/setup-auth-server
+        with:
+          client-id: smoke-client
+          jwt-kid: stress
+          repository-used: mongo
+          redirect-uris: https://app.example.com/callback
+          post-logout-redirect-allowlist: https://app.example.com/logged-out
+          extra-env: |
+            MONGO_HOST=localhost:27017
+            MONGO_USER=stress
+            MONGO_PASSWORD=stress
+            MONGO_AUTH_SOURCE=admin
+            MONGO_DATABASE=stress
+            REDIS_ADDR=localhost:6379
+            RATE_LIMIT_PER_MIN=0
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth
