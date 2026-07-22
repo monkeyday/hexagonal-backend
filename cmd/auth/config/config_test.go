@@ -35,16 +35,17 @@ func completeFileRepo() *FileRepositoryConfig {
 
 func TestNormalizePort(t *testing.T) {
 	tests := []struct {
+		name string
 		in   string
 		want string
 	}{
-		{"", ""},
-		{"9876", ":9876"},
-		{":9876", ":9876"},
-		{"0.0.0.0:9876", "0.0.0.0:9876"},
+		{"empty", "", ""},
+		{"bare port", "9876", ":9876"},
+		{"colon port", ":9876", ":9876"},
+		{"host and port", "0.0.0.0:9876", "0.0.0.0:9876"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.in, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			if got := normalizePort(tt.in); got != tt.want {
 				t.Errorf("normalizePort(%q) = %q, want %q", tt.in, got, tt.want)
 			}
