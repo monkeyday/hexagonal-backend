@@ -10,6 +10,8 @@ import (
 	autherrors "sc/modules/auth/errors"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestGetTokenUseCase(t *testing.T) {
@@ -252,4 +254,32 @@ func TestGetToken_AccountLockout(t *testing.T) {
 			t.Errorf("FailedLoginAttempts = %d, want 0", user.FailedLoginAttempts)
 		}
 	})
+}
+
+func TestGetToken_RehashOnLogin(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("Password1!"), 10)
+	if err != nil {
+		t.Fatalf("setup: GenerateFromPassword: %v", err)
+	}
+	user := newTestUser()
+	user.Password = string(hash)
+	repo := newMockRepo(user)
+	uc := NewGetTokenUseCase(define.Dependencies{
+		UserRepo:         repo,
+		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		JWTSvc:           &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
+		ScopeAllowlist:   []string{"openid"},
+	})
+
+	if _, err := uc.Execute(context.Background(), &GetTokenQuery{Email: "test@example.com", Password: "Password1!"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cost, err := bcrypt.Cost([]byte(user.Password))
+	if err != nil {
+		t.Fatalf("bcrypt.Cost: %v", err)
+	}
+	if cost != 12 {
+		t.Errorf("saved hash cost = %d, want 12", cost)
+	}
 }

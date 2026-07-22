@@ -113,7 +113,8 @@ func (uc *CreateAuthCodeUseCase) verifyCredentials(ctx context.Context, session 
 		return "", autherrors.NewErrInvalidEmailOrPassword()
 	}
 
-	uc.resetAccountFailures(ctx, user)
+	rehashed := user.RehashPasswordIfNeeded(password)
+	uc.resetAccountFailures(ctx, user, rehashed)
 	return user.ID, nil
 }
 
@@ -127,11 +128,14 @@ func (uc *CreateAuthCodeUseCase) recordAccountFailure(ctx context.Context, user 
 	}
 }
 
-func (uc *CreateAuthCodeUseCase) resetAccountFailures(ctx context.Context, user *entity.User) {
-	if user.FailedLoginAttempts == 0 && user.LockedUntil == nil {
+func (uc *CreateAuthCodeUseCase) resetAccountFailures(ctx context.Context, user *entity.User, dirty bool) {
+	hasFailures := user.FailedLoginAttempts != 0 || user.LockedUntil != nil
+	if !hasFailures && !dirty {
 		return
 	}
-	user.ResetFailedLogins()
+	if hasFailures {
+		user.ResetFailedLogins()
+	}
 	if err := uc.userRepo.Save(ctx, user); err != nil {
 		log.Warn().Err(err).Str("user_id", string(user.ID)).Msg("failed to reset account login failures")
 	}
