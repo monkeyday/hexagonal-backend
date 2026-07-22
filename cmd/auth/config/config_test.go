@@ -33,6 +33,25 @@ func completeFileRepo() *FileRepositoryConfig {
 	return &FileRepositoryConfig{Dir: "/data", UserFileName: "users.json", RefreshTokenFileName: "refresh_tokens.json"}
 }
 
+func TestNormalizePort(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"9876", ":9876"},
+		{":9876", ":9876"},
+		{"0.0.0.0:9876", "0.0.0.0:9876"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := normalizePort(tt.in); got != tt.want {
+				t.Errorf("normalizePort(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSettingsRepositoryValidation(t *testing.T) {
 	tests := []struct {
 		name    string

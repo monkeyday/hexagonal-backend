@@ -82,7 +82,7 @@ func Load(entryPath string) *Settings {
 
 		cfg = &Settings{
 			Server: coreweb.Config{
-				Port:            os.Getenv("PORT"),
+				Port:            normalizePort(os.Getenv("PORT")),
 				CorsOrigins:     parseCorsOrigins(os.Getenv("CORS_ORIGINS")),
 				CookieSecure:    os.Getenv("COOKIE_SECURE") == "true",
 				MetricsAddr:     os.Getenv("METRICS_ADDR"),
@@ -296,6 +296,16 @@ func parseCorsOrigins(raw string) []string {
 		}
 	}
 	return origins
+}
+
+func normalizePort(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, ":") {
+		return raw
+	}
+	return ":" + raw
 }
 
 func envFilePath(entryPath string) (string, bool) {
