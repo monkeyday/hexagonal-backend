@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	coreerror "sc/core/error"
@@ -547,4 +548,68 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefreshTokenUseCase_UoWError exercises the error-wrapping logic added to
+// updateRefreshToken: a bare (non-ErrorStruct) error from the UnitOfWork (e.g.
+// session/transaction start failure) must be wrapped into GenRefreshTokenFailed,
+// while an ErrorStruct already produced inside the closure must pass through
+// without an additional layer of wrapping.
+func TestRefreshTokenUseCase_UoWError(t *testing.T) {
+	ctx := context.Background()
+
+	newValidRT := func() *entity.RefreshToken {
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
+	}
+
+	newUseCase := func(uow interface {
+		Do(context.Context, func(context.Context) (any, error)) (any, error)
+	}, rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              uow,
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		return mod
+	}
+
+	cmd := &RefreshTokenCommand{GrantType: "refresh_token", ClientID: "APP_ID", RefreshToken: "valid-refresh-token"}
+
+	t.Run("bare UoW error wrapped to GenRefreshTokenFailed", func(t *testing.T) {
+		_, err := newUseCase(
+			&failingUoW{err: fmt.Errorf("session start failed")},
+			newMockRefreshTokenRepo(newValidRT()),
+		).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %d, want %d", es.Code(), autherrors.GenRefreshTokenFailed)
+		}
+	})
+
+	t.Run("ErrorStruct from inside closure passes through unwrapped", func(t *testing.T) {
+		// RevokeByTokenHash returns ErrNotFound inside the closure, which the use
+		// case wraps to NewErrInvalidRefreshToken (an ErrorStruct). The UoW
+		// returns that ErrorStruct; the outer wrapping must not re-wrap it.
+		rtRepo := newMockRefreshTokenRepo(newValidRT())
+		rtRepo.revokeByHashErr = errors.New("db error") // non-ErrNotFound → GenRefreshTokenFailed inside closure
+		_, err := newUseCase(&mockUoW{}, rtRepo).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if _, ok := err.(*coreerror.ErrorStruct); !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %v, want %d (GenRefreshTokenFailed)", err, autherrors.GenRefreshTokenFailed)
+		}
+	})
 }

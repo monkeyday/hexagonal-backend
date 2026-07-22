@@ -403,6 +403,14 @@ func (m *transactionalMockUoW) Do(ctx context.Context, fn func(context.Context) 
 	return result, err
 }
 
+// failingUoW returns a bare error without invoking the callback, simulating a
+// session/transaction start failure (e.g. no replica set, network error).
+type failingUoW struct{ err error }
+
+func (m *failingUoW) Do(_ context.Context, _ func(context.Context) (any, error)) (any, error) {
+	return nil, m.err
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newTestUser() *entity.User {
