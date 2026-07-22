@@ -24,7 +24,7 @@ func mustNewSession(t *testing.T, args entity.AuthorizeRequestArgs) *entity.Auth
 }
 
 func TestCreateAuthCodeUseCase(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -202,7 +202,7 @@ func TestCreateAuthCodeUseCase_Validation(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_PKCEPropagation(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -246,7 +246,7 @@ func TestCreateAuthCodeUseCase_PKCEPropagation(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_SessionConsumedOnSuccess(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -324,7 +324,7 @@ func TestCreateAuthCodeUseCase_LocksOutAfterMaxFailedAttempts(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_WrongPasswordPreservesSession(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -408,7 +408,7 @@ func TestCreateAuthCode_AccountLockout(t *testing.T) {
 	})
 
 	t.Run("successful login resets the counter", func(t *testing.T) {
-		user := newTestUser()
+		user := newTestUserWithValidPassword()
 		userRepo := newMockRepo(user)
 
 		for i := 0; i < entity.MaxFailedLoginAttempts-1; i++ {

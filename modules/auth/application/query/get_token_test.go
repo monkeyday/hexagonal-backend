@@ -35,7 +35,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:      "success — no scope defaults to full allowlist",
 			cmd:       &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
 			jwt:       &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
-			repo:      newMockRepo(newTestUser()),
+			repo:      newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:    newMockRefreshTokenRepo(),
 			wantToken: "tok-access",
 			wantScope: "openid email profile phone",
@@ -44,7 +44,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:      "success — valid scope subset",
 			cmd:       &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("openid email")},
 			jwt:       &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
-			repo:      newMockRepo(newTestUser()),
+			repo:      newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:    newMockRefreshTokenRepo(),
 			wantToken: "tok-access",
 			wantScope: "openid email",
@@ -53,7 +53,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "success — custom expire_secs",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!", ExpireSecs: new(3600)},
 			jwt:         &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      newMockRefreshTokenRepo(),
 			wantToken:   "tok-access",
 			wantExpires: 3600,
@@ -62,7 +62,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "invalid scope",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("openid admin")},
 			jwt:         &mockJwtService{},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      newMockRefreshTokenRepo(),
 			wantErrCode: autherrors.InvalidArguments,
 		},
@@ -110,7 +110,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "genAccessToken fails",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
 			jwt:         &mockJwtService{accessErr: errors.New("sign error")},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      newMockRefreshTokenRepo(),
 			wantErrCode: autherrors.GenTokenFailed,
 		},
@@ -118,7 +118,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "genRefreshToken fails",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
 			jwt:         &mockJwtService{accessToken: "tok-access", refreshErr: errors.New("rand error")},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      newMockRefreshTokenRepo(),
 			wantErrCode: autherrors.GenRefreshTokenFailed,
 		},
@@ -126,7 +126,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "genIDToken fails",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
 			jwt:         &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh", idTokenErr: errors.New("sign error")},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      newMockRefreshTokenRepo(),
 			wantErrCode: autherrors.GenTokenFailed,
 		},
@@ -134,7 +134,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:        "RT save fails — GenTokenFailed",
 			cmd:         &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
 			jwt:         &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
-			repo:        newMockRepo(newTestUser()),
+			repo:        newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:      &mockRefreshTokenRepo{tokens: make(map[string]*entity.RefreshToken), saveErr: errors.New("db error")},
 			wantErrCode: autherrors.GenTokenFailed,
 		},
@@ -142,7 +142,7 @@ func TestGetTokenUseCase(t *testing.T) {
 			name:             "explicit scope without openid — id_token omitted",
 			cmd:              &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("email profile")},
 			jwt:              &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
-			repo:             newMockRepo(newTestUser()),
+			repo:             newMockRepo(newTestUserWithValidPassword()),
 			rtRepo:           newMockRefreshTokenRepo(),
 			wantToken:        "tok-access",
 			wantScope:        "email profile",
@@ -260,7 +260,7 @@ func TestGetToken_AccountLockout(t *testing.T) {
 	})
 
 	t.Run("successful login resets failures", func(t *testing.T) {
-		user := newTestUser()
+		user := newTestUserWithValidPassword()
 		user.FailedLoginAttempts = entity.MaxFailedLoginAttempts - 1
 		uc, _ := newUC(user)
 

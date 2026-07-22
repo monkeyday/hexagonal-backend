@@ -414,16 +414,40 @@ func (m *failingUoW) Do(_ context.Context, _ func(context.Context) (any, error))
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func newTestUser() *entity.User {
-	u, err := entity.NewUser(entity.UserArgs{
+	now := time.Now()
+	return &entity.User{
+		ID:            entity.UserID("user-1"),
+		TenantID:      entity.DefaultTenantID,
 		Username:      "testuser",
 		Nickname:      "testnick",
-		Password:      "Password1!",
+		Password:      "hashed-password",
 		Email:         "test@example.com",
 		EmailVerified: true,
-	})
-	if err != nil {
-		panic(err)
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
-	u.ID = "user-1"
+}
+
+var (
+	testPasswordHashOnce sync.Once
+	testPasswordHash     string
+)
+
+func newTestUserWithValidPassword() *entity.User {
+	testPasswordHashOnce.Do(func() {
+		u, err := entity.NewUser(entity.UserArgs{
+			Username:      "testuser",
+			Nickname:      "testnick",
+			Password:      "Password1!",
+			Email:         "test@example.com",
+			EmailVerified: true,
+		})
+		if err != nil {
+			panic(err)
+		}
+		testPasswordHash = u.Password
+	})
+	u := newTestUser()
+	u.Password = testPasswordHash
 	return u
 }
