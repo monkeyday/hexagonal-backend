@@ -1,0 +1,16 @@
+.git
+.github
+.claude
+docs
+portfolio-poc
+smoke_test
+stress_test
+e2e
+assets/*.jsx
+**/.secret
+**/.env
+**/.env.example
+tmp
+*.md
+Dockerfile
+.dockerignore
