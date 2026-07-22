@@ -67,8 +67,12 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 		return nil, autherrors.NewErrInvalidEmailOrPassword()
 	}
 
-	if user.FailedLoginAttempts > 0 || user.LockedUntil != nil {
+	rehashed := user.RehashPasswordIfNeeded(q.Password)
+	hadFailures := user.FailedLoginAttempts > 0 || user.LockedUntil != nil
+	if hadFailures {
 		user.ResetFailedLogins()
+	}
+	if hadFailures || rehashed {
 		if saveErr := uc.userRepo.Save(ctx, user); saveErr != nil {
 			log.Warn().Err(saveErr).Str("user_id", string(user.ID)).Msg("failed to reset account login failures")
 		}

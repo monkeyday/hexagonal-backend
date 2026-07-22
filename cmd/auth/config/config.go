@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,15 +71,18 @@ var (
 
 func Load(entryPath string) *Settings {
 	once.Do(func() {
-		envPath := envFilePath(entryPath)
+		envPath, explicit := envFilePath(entryPath)
 		if err := godotenv.Load(envPath); err != nil {
-			log.Err(err).Msg("Failed to load environment variables")
-			panic("Error loading environment variables")
+			if explicit || !errors.Is(err, fs.ErrNotExist) {
+				log.Err(err).Msg("Failed to load environment variables")
+				panic("Error loading environment variables")
+			}
+			log.Info().Str("path", envPath).Msg("no .env file found; using process environment")
 		}
 
 		cfg = &Settings{
 			Server: coreweb.Config{
-				Port:            os.Getenv("PORT"),
+				Port:            normalizePort(os.Getenv("PORT")),
 				CorsOrigins:     parseCorsOrigins(os.Getenv("CORS_ORIGINS")),
 				CookieSecure:    os.Getenv("COOKIE_SECURE") == "true",
 				MetricsAddr:     os.Getenv("METRICS_ADDR"),
@@ -293,9 +298,19 @@ func parseCorsOrigins(raw string) []string {
 	return origins
 }
 
-func envFilePath(entryPath string) string {
-	if f := os.Getenv("ENV_PATH"); f != "" {
-		return f
+func normalizePort(raw string) string {
+	if raw == "" {
+		return ""
 	}
-	return filepath.Join(entryPath, envFile)
+	if strings.Contains(raw, ":") {
+		return raw
+	}
+	return ":" + raw
+}
+
+func envFilePath(entryPath string) (string, bool) {
+	if f := os.Getenv("ENV_PATH"); f != "" {
+		return f, true
+	}
+	return filepath.Join(entryPath, envFile), false
 }

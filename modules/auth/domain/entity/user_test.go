@@ -3,6 +3,8 @@ package entity
 import (
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestUserAccountLockout(t *testing.T) {
@@ -74,6 +76,71 @@ func TestUserAccountLockout(t *testing.T) {
 		u.ResetFailedLogins()
 		if u.FailedLoginAttempts != 0 || u.LockedUntil != nil {
 			t.Errorf("reset must clear state, got attempts=%d locked=%v", u.FailedLoginAttempts, u.LockedUntil)
+		}
+	})
+}
+
+func TestPasswordHashCost(t *testing.T) {
+	const correctPassword = "Password1!"
+
+	t.Run("NewUser hashes with passwordHashCost", func(t *testing.T) {
+		u, err := NewUser(UserArgs{Username: "u", Nickname: "n", Password: correctPassword, Email: "u@example.com"})
+		if err != nil {
+			t.Fatalf("NewUser: %v", err)
+		}
+		cost, err := bcrypt.Cost([]byte(u.Password))
+		if err != nil {
+			t.Fatalf("bcrypt.Cost: %v", err)
+		}
+		if cost != passwordHashCost {
+			t.Errorf("hash cost = %d, want %d", cost, passwordHashCost)
+		}
+	})
+
+	t.Run("cost-10 hash — rehash returns true and new cost is 12", func(t *testing.T) {
+		hash, err := bcrypt.GenerateFromPassword([]byte(correctPassword), 10)
+		if err != nil {
+			t.Fatalf("GenerateFromPassword: %v", err)
+		}
+		u := &User{Password: string(hash)}
+		if !u.RehashPasswordIfNeeded(correctPassword) {
+			t.Fatal("RehashPasswordIfNeeded should return true for cost-10 hash")
+		}
+		cost, err := bcrypt.Cost([]byte(u.Password))
+		if err != nil {
+			t.Fatalf("bcrypt.Cost after rehash: %v", err)
+		}
+		if cost != passwordHashCost {
+			t.Errorf("rehashed cost = %d, want %d", cost, passwordHashCost)
+		}
+		if err := u.ValidatePassword(correctPassword); err != nil {
+			t.Errorf("ValidatePassword after rehash: %v", err)
+		}
+	})
+
+	t.Run("hash already at cost 12 — returns false, Password unchanged", func(t *testing.T) {
+		hash, err := bcrypt.GenerateFromPassword([]byte(correctPassword), 12)
+		if err != nil {
+			t.Fatalf("GenerateFromPassword: %v", err)
+		}
+		u := &User{Password: string(hash)}
+		original := u.Password
+		if u.RehashPasswordIfNeeded(correctPassword) {
+			t.Fatal("RehashPasswordIfNeeded should return false for already cost-12 hash")
+		}
+		if u.Password != original {
+			t.Error("Password should be unchanged when already at target cost")
+		}
+	})
+
+	t.Run("invalid hash — returns false, Password unchanged", func(t *testing.T) {
+		u := &User{Password: "not-a-valid-bcrypt-hash"}
+		original := u.Password
+		if u.RehashPasswordIfNeeded(correctPassword) {
+			t.Fatal("RehashPasswordIfNeeded should return false for invalid hash")
+		}
+		if u.Password != original {
+			t.Error("Password should be unchanged for invalid hash")
 		}
 	})
 }

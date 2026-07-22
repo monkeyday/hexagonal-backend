@@ -12,6 +12,8 @@ import (
 const PasswordResetTokenTTL = 15 * time.Minute
 
 const (
+	passwordHashCost = 12
+
 	// MaxFailedLoginAttempts is the account-level threshold; at and beyond it
 	// the account is locked with exponentially increasing duration.
 	MaxFailedLoginAttempts = 5
@@ -105,6 +107,16 @@ func validatePassword(p string) error {
 
 func (u *User) ValidatePassword(password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+}
+
+func (u *User) RehashPasswordIfNeeded(password string) bool {
+	cost, err := bcrypt.Cost([]byte(u.Password))
+	if err != nil || cost >= passwordHashCost {
+		return false
+	}
+	u.Password = hashPassword(password)
+	u.UpdatedAt = time.Now()
+	return true
 }
 
 func (u *User) IsLockedOut() bool {
@@ -204,7 +216,7 @@ func GeneratePasswordResetToken() (string, error) {
 }
 
 func hashPassword(password string) string {
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		panic(err)
 	}

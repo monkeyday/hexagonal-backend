@@ -32,8 +32,10 @@ jobs:
           restore-keys: golangci-lint-${{ runner.os }}-
       - name: Install golangci-lint
         run: |
-          curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin --strip-components=1 golangci-lint-2.12.2-linux-amd64/golangci-lint
+          curl -sSfLO "https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz"
+          echo "8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553  golangci-lint-2.12.2-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf golangci-lint-2.12.2-linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 golangci-lint-2.12.2-linux-amd64/golangci-lint
+          rm golangci-lint-2.12.2-linux-amd64.tar.gz
       - run: golangci-lint run
 
   test:
@@ -50,7 +52,12 @@ jobs:
       - run: go mod verify
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ env.ACT != 'true' }}
+        with:
+          name: coverage
+          path: coverage.out
 
   # Runs the backend-parity tests against a real MongoDB + Redis. The repo tests
   # skip the gated cases unless MONGO_* / REDIS_* is set (see requireMongo,
@@ -60,17 +67,18 @@ jobs:
     timeout-minutes: 15
     services:
       mongo:
-        image: mongo:7
-        # The Mongo config requires credentials; enable root auth and mirror
-        # it in the test env below.
+        # Atlas Local initializes a single-node replica set out of the box —
+        # required by the UnitOfWork transaction tests (WithTransaction needs
+        # a replica set). Credentials mirrored in the test env below.
+        image: mongodb/mongodb-atlas-local:8.2.4
         env:
-          MONGO_INITDB_ROOT_USERNAME: test
-          MONGO_INITDB_ROOT_PASSWORD: test
+          MONGODB_INITDB_ROOT_USERNAME: test
+          MONGODB_INITDB_ROOT_PASSWORD: test
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --quiet -u test -p test --eval 'db.adminCommand({ ping: 1 })'"
-          --health-interval 10s --health-timeout 5s --health-retries 10
+          --health-cmd "mongosh --quiet -u test -p test --eval 'db.hello().isWritablePrimary ? quit(0) : quit(1)'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
       redis:
         image: redis:7
         ports:
@@ -115,36 +123,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Generate RSA key pair
-        run: |
-          mkdir -p ci-keys
-          openssl genrsa -out ci-keys/private_key.pem 2048
-          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
-
-      - name: Write CI .env
-        run: |
-          cat > ci.env << EOF
-          PORT=:9876
-          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
-          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
-          JWT_KID=ci
-          JWT_ISSUER=http://127.0.0.1:9876
-          REPOSITORY_USED=file
-          FILE_DIR=$GITHUB_WORKSPACE/tmp
-          USER_FILE_PATH=user.json
-          OAUTH_CLIENT_ID=my_client
-          OAUTH_CLIENT_AUTH_METHOD=client_secret_basic
-          OAUTH_CLIENT_SECRET=super-secret-e2e-client-secret
-          OAUTH_CLIENT_REDIRECT_URIS=http://localhost:3000/callback
-          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000
-          METRICS_ADDR=127.0.0.1:9878
-          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
-          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
-          SMTP_HOST=localhost
-          SMTP_PORT=1025
-          SMTP_FROM=noreply@auth.local
-          APP_BASE_URL=http://localhost:3000
-          EOF
+      - name: Setup auth server env
+        uses: ./.github/actions/setup-auth-server
+        with:
+          client-id: my_client
+          client-auth-method: client_secret_basic
+          client-secret: super-secret-e2e-client-secret
+          redirect-uris: http://localhost:3000/callback
+          post-logout-redirect-allowlist: http://localhost:3000
+          extra-env: |
+            SMTP_HOST=localhost
+            SMTP_PORT=1025
+            SMTP_FROM=noreply@auth.local
+            APP_BASE_URL=http://localhost:3000
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth
@@ -182,38 +173,22 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Generate RSA key pair
-        run: |
-          mkdir -p ci-keys
-          openssl genrsa -out ci-keys/private_key.pem 2048
-          openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
-
-      - name: Write CI .env
-        run: |
-          cat > ci.env << EOF
-          PORT=:9876
-          PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
-          PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
-          JWT_KID=ci
-          JWT_ISSUER=http://127.0.0.1:9876
-          REPOSITORY_USED=file
-          FILE_DIR=$GITHUB_WORKSPACE/tmp
-          USER_FILE_PATH=user.json
-          OAUTH_CLIENT_ID=smoke-client
-          OAUTH_CLIENT_REDIRECT_URIS=https://app.example.com/callback
-          OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=http://localhost:3000,https://app.example.com/logged-out
-          METRICS_ADDR=127.0.0.1:9878
-          EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
-          EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
-          EOF
+      - name: Setup auth server env
+        uses: ./.github/actions/setup-auth-server
+        with:
+          client-id: smoke-client
+          redirect-uris: https://app.example.com/callback
+          post-logout-redirect-allowlist: http://localhost:3000,https://app.example.com/logged-out
 
       - name: Build server
         run: go build -o bin/auth ./cmd/auth
 
       - name: Install k6
         run: |
-          curl -sSfL "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin --strip-components=1 k6-v2.0.0-linux-amd64/k6
+          curl -sSfLO "https://github.com/grafana/k6/releases/download/v2.1.0/k6-v2.1.0-linux-amd64.tar.gz"
+          echo "295d961ebfca306f295f1133068dcd403a8171c87f387928f5f30b0fbcff858a  k6-v2.1.0-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf k6-v2.1.0-linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 k6-v2.1.0-linux-amd64/k6
+          rm k6-v2.1.0-linux-amd64.tar.gz
 
       - name: Run smoke tests
         env:
@@ -262,6 +237,24 @@ jobs:
         run: go install github.com/google/go-licenses@v1.6.0
       - run: go-licenses check ./... --disallowed_types=restricted,forbidden
 
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Build image
+        run: docker build -t auth:${{ github.sha }} .
+      - name: Install Trivy
+        run: |
+          curl -sSfLO "https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz"
+          echo "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea  trivy_0.72.0_Linux-64bit.tar.gz" | sha256sum -c -
+          tar -xzf trivy_0.72.0_Linux-64bit.tar.gz -C /usr/local/bin trivy
+          rm trivy_0.72.0_Linux-64bit.tar.gz
+      - name: Scan image
+        # --ignore-unfixed: unpatched CVEs (no upstream fix) don't fail the gate — accepted trade-off;
+        # the distroless runtime carries only 4 OS packages, and blocking on unfixable findings would freeze CI
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed auth:${{ github.sha }}
+
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -270,6 +263,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install gitleaks
-        run: curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+        run: |
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C /usr/local/bin gitleaks
+          rm gitleaks_8.30.1_linux_x64.tar.gz
       - name: Scan for secrets
         run: gitleaks detect --source . --redact

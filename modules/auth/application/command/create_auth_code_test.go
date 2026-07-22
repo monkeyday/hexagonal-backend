@@ -10,6 +10,8 @@ import (
 	autherrors "sc/modules/auth/errors"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func mustNewSession(t *testing.T, args entity.AuthorizeRequestArgs) *entity.AuthorizeRequest {
@@ -22,7 +24,7 @@ func mustNewSession(t *testing.T, args entity.AuthorizeRequestArgs) *entity.Auth
 }
 
 func TestCreateAuthCodeUseCase(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -200,7 +202,7 @@ func TestCreateAuthCodeUseCase_Validation(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_PKCEPropagation(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -244,7 +246,7 @@ func TestCreateAuthCodeUseCase_PKCEPropagation(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_SessionConsumedOnSuccess(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -322,7 +324,7 @@ func TestCreateAuthCodeUseCase_LocksOutAfterMaxFailedAttempts(t *testing.T) {
 }
 
 func TestCreateAuthCodeUseCase_WrongPasswordPreservesSession(t *testing.T) {
-	user := newTestUser()
+	user := newTestUserWithValidPassword()
 	userRepo := newMockRepo(user)
 
 	session := mustNewSession(t, entity.AuthorizeRequestArgs{
@@ -406,7 +408,7 @@ func TestCreateAuthCode_AccountLockout(t *testing.T) {
 	})
 
 	t.Run("successful login resets the counter", func(t *testing.T) {
-		user := newTestUser()
+		user := newTestUserWithValidPassword()
 		userRepo := newMockRepo(user)
 
 		for i := 0; i < entity.MaxFailedLoginAttempts-1; i++ {
@@ -425,4 +427,40 @@ func TestCreateAuthCode_AccountLockout(t *testing.T) {
 			t.Error("a single failure after reset must not lock the account")
 		}
 	})
+}
+
+func TestCreateAuthCode_RehashOnLogin(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("Password1!"), 10)
+	if err != nil {
+		t.Fatalf("setup: GenerateFromPassword: %v", err)
+	}
+	user := newTestUser()
+	user.Password = string(hash)
+	userRepo := newMockRepo(user)
+
+	session := mustNewSession(t, entity.AuthorizeRequestArgs{
+		ClientID:    "client-123",
+		RedirectURI: "https://app.example.com/callback",
+		Scope:       "openid",
+	})
+	sessionID := string(session.ID)
+	c := newMockCache().seed(fmt.Sprintf(define.AuthorizeRequestCacheKey, sessionID), session)
+	uc := &CreateAuthCodeUseCase{userRepo: userRepo, cache: c}
+
+	if _, err := uc.Execute(context.Background(), &CreateAuthCodeCommand{
+		Email:     "test@example.com",
+		Password:  "Password1!",
+		CSRFToken: session.CSRFToken,
+		SessionID: sessionID,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cost, err := bcrypt.Cost([]byte(user.Password))
+	if err != nil {
+		t.Fatalf("bcrypt.Cost: %v", err)
+	}
+	if cost != 12 {
+		t.Errorf("saved hash cost = %d, want 12", cost)
+	}
 }

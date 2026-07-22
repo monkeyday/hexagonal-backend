@@ -56,8 +56,12 @@ func (uc *GetDiscoveryUseCase) Execute(_ context.Context, _ any) (any, error) {
 		IDTokenSigningAlgValuesSupported: []string{"RS256"},
 		ScopesSupported:                  entity.SupportedScopes,
 		GrantTypesSupported:              []string{"authorization_code", "password", "refresh_token"},
-		TokenEndpointAuthMethods:         []string{"none"},
-		CodeChallengeMethodsSupported:    []string{entity.CodeChallengeMethodS256},
-		ClaimsSupported:                  []string{"sub", "email", "email_verified", "preferred_username", "nickname", "updated_at"},
+		TokenEndpointAuthMethods: []string{
+			string(entity.ClientAuthNone),
+			string(entity.ClientAuthSecretBasic),
+			string(entity.ClientAuthSecretPost),
+		},
+		CodeChallengeMethodsSupported: []string{entity.CodeChallengeMethodS256},
+		ClaimsSupported:               []string{"sub", "email", "email_verified", "preferred_username", "nickname", "updated_at"},
 	}, nil
 }

@@ -1,0 +1,85 @@
+name: Setup auth server
+description: Generate an RSA test key pair and write the ci.env consumed by the server via ENV_PATH
+
+inputs:
+  client-id:
+    description: OAUTH_CLIENT_ID value
+    required: true
+  redirect-uris:
+    description: OAUTH_CLIENT_REDIRECT_URIS value
+    required: true
+  post-logout-redirect-allowlist:
+    description: OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST value
+    required: true
+  client-auth-method:
+    description: OAUTH_CLIENT_AUTH_METHOD; empty omits the line
+    required: false
+    default: ""
+  client-secret:
+    description: OAUTH_CLIENT_SECRET; empty omits the line
+    required: false
+    default: ""
+  jwt-kid:
+    description: JWT_KID value
+    required: false
+    default: ci
+  repository-used:
+    description: REPOSITORY_USED backend; "file" also writes FILE_DIR/USER_FILE_PATH
+    required: false
+    default: file
+  extra-env:
+    description: Extra KEY=VALUE lines appended verbatim to ci.env
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Generate RSA key pair
+      shell: bash
+      run: |
+        mkdir -p ci-keys
+        openssl genrsa -out ci-keys/private_key.pem 2048
+        openssl rsa -in ci-keys/private_key.pem -pubout -out ci-keys/public_key.pem
+
+    - name: Write CI .env
+      shell: bash
+      env:
+        CLIENT_ID: ${{ inputs.client-id }}
+        REDIRECT_URIS: ${{ inputs.redirect-uris }}
+        POST_LOGOUT_ALLOWLIST: ${{ inputs.post-logout-redirect-allowlist }}
+        CLIENT_AUTH_METHOD: ${{ inputs.client-auth-method }}
+        CLIENT_SECRET: ${{ inputs.client-secret }}
+        JWT_KID: ${{ inputs.jwt-kid }}
+        REPOSITORY_USED: ${{ inputs.repository-used }}
+        EXTRA_ENV: ${{ inputs.extra-env }}
+      run: |
+        cat > ci.env << EOF
+        PORT=:9876
+        PRIVATE_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/private_key.pem
+        PUBLIC_KEY_PATH=$GITHUB_WORKSPACE/ci-keys/public_key.pem
+        JWT_KID=$JWT_KID
+        JWT_ISSUER=http://127.0.0.1:9876
+        REPOSITORY_USED=$REPOSITORY_USED
+        OAUTH_CLIENT_ID=$CLIENT_ID
+        OAUTH_CLIENT_REDIRECT_URIS=$REDIRECT_URIS
+        OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST=$POST_LOGOUT_ALLOWLIST
+        METRICS_ADDR=127.0.0.1:9878
+        EMAIL_ENCRYPTION_KEY=$(openssl rand -base64 32)
+        EMAIL_BLIND_INDEX_KEY=$(openssl rand -base64 32)
+        EOF
+        if [ "$REPOSITORY_USED" = "file" ]; then
+          {
+            echo "FILE_DIR=$GITHUB_WORKSPACE/tmp"
+            echo "USER_FILE_PATH=user.json"
+          } >> ci.env
+        fi
+        if [ -n "$CLIENT_AUTH_METHOD" ]; then
+          echo "OAUTH_CLIENT_AUTH_METHOD=$CLIENT_AUTH_METHOD" >> ci.env
+        fi
+        if [ -n "$CLIENT_SECRET" ]; then
+          echo "OAUTH_CLIENT_SECRET=$CLIENT_SECRET" >> ci.env
+        fi
+        if [ -n "$EXTRA_ENV" ]; then
+          printf '%s\n' "$EXTRA_ENV" >> ci.env
+        fi

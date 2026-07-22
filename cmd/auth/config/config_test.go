@@ -33,6 +33,26 @@ func completeFileRepo() *FileRepositoryConfig {
 	return &FileRepositoryConfig{Dir: "/data", UserFileName: "users.json", RefreshTokenFileName: "refresh_tokens.json"}
 }
 
+func TestNormalizePort(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"bare port", "9876", ":9876"},
+		{"colon port", ":9876", ":9876"},
+		{"host and port", "0.0.0.0:9876", "0.0.0.0:9876"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizePort(tt.in); got != tt.want {
+				t.Errorf("normalizePort(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSettingsRepositoryValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -90,6 +110,43 @@ func TestSettingsSMTPValidation(t *testing.T) {
 			err := validator.ValidateStruct(s)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ValidateStruct() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestEnvFilePath(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		entry        string
+		wantPath     string
+		wantExplicit bool
+	}{
+		{
+			name:         "ENV_PATH set — explicit",
+			envValue:     "/custom/.env",
+			entry:        "/app",
+			wantPath:     "/custom/.env",
+			wantExplicit: true,
+		},
+		{
+			name:         "ENV_PATH unset — implicit default",
+			envValue:     "",
+			entry:        "/app",
+			wantPath:     "/app/.env",
+			wantExplicit: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENV_PATH", tt.envValue)
+			gotPath, gotExplicit := envFilePath(tt.entry)
+			if gotPath != tt.wantPath {
+				t.Errorf("path = %q, want %q", gotPath, tt.wantPath)
+			}
+			if gotExplicit != tt.wantExplicit {
+				t.Errorf("explicit = %v, want %v", gotExplicit, tt.wantExplicit)
 			}
 		})
 	}

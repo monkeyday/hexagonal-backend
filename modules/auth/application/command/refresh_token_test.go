@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	coreerror "sc/core/error"
@@ -101,6 +102,9 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		}
 		if !newRT.AuthenticatedAt.Equal(originalAuthAt) {
 			t.Errorf("AuthenticatedAt not preserved across rotation: got %v, want %v", newRT.AuthenticatedAt, originalAuthAt)
+		}
+		if newRT.Scope.String() != rt.Scope.String() {
+			t.Errorf("Scope not preserved across rotation: got %q, want %q", newRT.Scope.String(), rt.Scope.String())
 		}
 	})
 
@@ -223,13 +227,14 @@ func TestRefreshTokenUseCase(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		cmd         *RefreshTokenCommand
-		jwt         *mockJwtService
-		repo        *mockUserRepo
-		rtRepo      *mockRefreshTokenRepo
-		wantErrCode coreerror.ErrCode
-		wantToken   string
+		name             string
+		cmd              *RefreshTokenCommand
+		jwt              *mockJwtService
+		repo             *mockUserRepo
+		rtRepo           *mockRefreshTokenRepo
+		wantErrCode      coreerror.ErrCode
+		wantToken        string
+		wantIDTokenEmpty bool
 	}{
 		{
 			name: "success",
@@ -491,6 +496,22 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			rtRepo:      newMockRefreshTokenRepo(newValidRT()),
 			wantErrCode: autherrors.InvalidClient,
 		},
+		{
+			name: "scope without openid — id_token omitted",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "APP_ID",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:  &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			repo: newMockRepo(newTestUser()),
+			rtRepo: newMockRefreshTokenRepo(entity.NewRefreshToken(
+				"user-1", "",
+				&entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("email profile")},
+			)),
+			wantToken:        "new-access",
+			wantIDTokenEmpty: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -529,8 +550,14 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			if resp.RefreshToken == "" {
 				t.Fatal("refresh_token should not be empty")
 			}
-			if resp.IDToken == "" {
-				t.Fatal("id_token should not be empty")
+			if tc.wantIDTokenEmpty {
+				if resp.IDToken != "" {
+					t.Errorf("id_token = %q, want empty", resp.IDToken)
+				}
+			} else {
+				if resp.IDToken == "" {
+					t.Fatal("id_token should not be empty")
+				}
 			}
 
 			// rotation: old token revoked, new token persisted, custom expire_secs honoured
@@ -547,4 +574,89 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefreshTokenUseCase_UoWError exercises the error-wrapping logic added to
+// updateRefreshToken: a bare (non-ErrorStruct) error from the UnitOfWork (e.g.
+// session/transaction start failure) must be wrapped into GenRefreshTokenFailed,
+// while an ErrorStruct already produced inside the closure must pass through
+// without an additional layer of wrapping.
+func TestRefreshTokenUseCase_UoWError(t *testing.T) {
+	ctx := context.Background()
+
+	newValidRT := func() *entity.RefreshToken {
+		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
+	}
+
+	newUseCase := func(uow interface {
+		Do(context.Context, func(context.Context) (any, error)) (any, error)
+	}, rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              uow,
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		return mod
+	}
+
+	cmd := &RefreshTokenCommand{GrantType: "refresh_token", ClientID: "APP_ID", RefreshToken: "valid-refresh-token"}
+
+	t.Run("bare UoW error wrapped to GenRefreshTokenFailed", func(t *testing.T) {
+		_, err := newUseCase(
+			&failingUoW{err: fmt.Errorf("session start failed")},
+			newMockRefreshTokenRepo(newValidRT()),
+		).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %d, want %d", es.Code(), autherrors.GenRefreshTokenFailed)
+		}
+	})
+
+	t.Run("ErrorStruct from inside closure passes through unwrapped", func(t *testing.T) {
+		// RevokeByTokenHash returns a non-ErrNotFound error inside the closure;
+		// the use case wraps it with NewErrGenRefreshTokenFailed (an ErrorStruct).
+		// The post-Do guard must return that ErrorStruct as-is without re-wrapping.
+		revokeByHashErr := errors.New("db error")
+		rtRepo := newMockRefreshTokenRepo(newValidRT())
+		rtRepo.revokeByHashErr = revokeByHashErr
+		_, err := newUseCase(&mockUoW{}, rtRepo).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %d, want %d (GenRefreshTokenFailed)", es.Code(), autherrors.GenRefreshTokenFailed)
+		}
+		if cause := errors.Unwrap(es); cause != revokeByHashErr {
+			t.Fatalf("expected unwrapped cause == revokeByHashErr sentinel, got %v", cause)
+		}
+	})
+
+	t.Run("ErrNotFound from closure becomes InvalidRefreshToken (not re-wrapped)", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo(newValidRT())
+		rtRepo.revokeByHashErr = coreerror.ErrNotFound
+		_, err := newUseCase(&mockUoW{}, rtRepo).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("got err_code %d, want %d (InvalidRefreshToken)", es.Code(), autherrors.InvalidRefreshToken)
+		}
+	})
 }

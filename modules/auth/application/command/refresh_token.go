@@ -139,5 +139,11 @@ func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *en
 		}
 		return nil, nil
 	})
-	return err
+	if err != nil {
+		if _, ok := err.(*coreerror.ErrorStruct); ok {
+			return err
+		}
+		return autherrors.NewErrGenRefreshTokenFailed(err)
+	}
+	return nil
 }

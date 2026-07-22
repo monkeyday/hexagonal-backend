@@ -34,16 +34,19 @@ func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedT
 		return nil, coreerror.NewErr(autherrors.GenRefreshTokenFailed, err)
 	}
 
-	idToken, err := s.issuer.GenIDToken(port.IDTokenArgs{
-		UserID:        string(req.User.ID),
-		ClientID:      string(req.ClientID),
-		Email:         req.User.Email,
-		Nonce:         req.Nonce,
-		EmailVerified: req.User.EmailVerified,
-		ExpireSecs:    req.ExpireSecs,
-	})
-	if err != nil {
-		return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
+	var idToken string
+	if req.Scope.Contains(entity.ScopeOpenID) {
+		idToken, err = s.issuer.GenIDToken(port.IDTokenArgs{
+			UserID:        string(req.User.ID),
+			ClientID:      string(req.ClientID),
+			Email:         req.User.Email,
+			Nonce:         req.Nonce,
+			EmailVerified: req.User.EmailVerified,
+			ExpireSecs:    req.ExpireSecs,
+		})
+		if err != nil {
+			return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
+		}
 	}
 
 	return &entity.IssuedTokens{
