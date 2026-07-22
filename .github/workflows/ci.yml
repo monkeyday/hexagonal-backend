@@ -52,7 +52,12 @@ jobs:
       - run: go mod verify
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ env.ACT != 'true' }}
+        with:
+          name: coverage
+          path: coverage.out
 
   # Runs the backend-parity tests against a real MongoDB + Redis. The repo tests
   # skip the gated cases unless MONGO_* / REDIS_* is set (see requireMongo,
