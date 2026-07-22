@@ -62,17 +62,18 @@ jobs:
     timeout-minutes: 15
     services:
       mongo:
-        image: mongo:7
-        # The Mongo config requires credentials; enable root auth and mirror
-        # it in the test env below.
+        # Atlas Local initializes a single-node replica set out of the box —
+        # required by the UnitOfWork transaction tests (WithTransaction needs
+        # a replica set). Credentials mirrored in the test env below.
+        image: mongodb/mongodb-atlas-local:8.2.4
         env:
-          MONGO_INITDB_ROOT_USERNAME: test
-          MONGO_INITDB_ROOT_PASSWORD: test
+          MONGODB_INITDB_ROOT_USERNAME: test
+          MONGODB_INITDB_ROOT_PASSWORD: test
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --quiet -u test -p test --eval 'db.adminCommand({ ping: 1 })'"
-          --health-interval 10s --health-timeout 5s --health-retries 10
+          --health-cmd "mongosh --quiet -u test -p test --eval 'db.hello().isWritablePrimary ? quit(0) : quit(1)'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
       redis:
         image: redis:7
         ports:
