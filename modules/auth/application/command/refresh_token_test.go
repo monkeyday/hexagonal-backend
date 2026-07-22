@@ -596,20 +596,41 @@ func TestRefreshTokenUseCase_UoWError(t *testing.T) {
 	})
 
 	t.Run("ErrorStruct from inside closure passes through unwrapped", func(t *testing.T) {
-		// RevokeByTokenHash returns ErrNotFound inside the closure, which the use
-		// case wraps to NewErrInvalidRefreshToken (an ErrorStruct). The UoW
-		// returns that ErrorStruct; the outer wrapping must not re-wrap it.
+		// RevokeByTokenHash returns a non-ErrNotFound error inside the closure;
+		// the use case wraps it with NewErrGenRefreshTokenFailed (an ErrorStruct).
+		// The post-Do guard must return that ErrorStruct as-is without re-wrapping.
+		revokeByHashErr := errors.New("db error")
 		rtRepo := newMockRefreshTokenRepo(newValidRT())
-		rtRepo.revokeByHashErr = errors.New("db error") // non-ErrNotFound → GenRefreshTokenFailed inside closure
+		rtRepo.revokeByHashErr = revokeByHashErr
 		_, err := newUseCase(&mockUoW{}, rtRepo).Dispatch(ctx, cmd)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		if _, ok := err.(*coreerror.ErrorStruct); !ok {
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
 			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
 		}
-		if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != autherrors.GenRefreshTokenFailed {
-			t.Fatalf("got err_code %v, want %d (GenRefreshTokenFailed)", err, autherrors.GenRefreshTokenFailed)
+		if es.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %d, want %d (GenRefreshTokenFailed)", es.Code(), autherrors.GenRefreshTokenFailed)
+		}
+		if cause := errors.Unwrap(es); cause != revokeByHashErr {
+			t.Fatalf("expected unwrapped cause == revokeByHashErr sentinel, got %v", cause)
+		}
+	})
+
+	t.Run("ErrNotFound from closure becomes InvalidRefreshToken (not re-wrapped)", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo(newValidRT())
+		rtRepo.revokeByHashErr = coreerror.ErrNotFound
+		_, err := newUseCase(&mockUoW{}, rtRepo).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("got err_code %d, want %d (InvalidRefreshToken)", es.Code(), autherrors.InvalidRefreshToken)
 		}
 	})
 }
