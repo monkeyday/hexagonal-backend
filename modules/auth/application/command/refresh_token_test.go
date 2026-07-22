@@ -103,6 +103,9 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		if !newRT.AuthenticatedAt.Equal(originalAuthAt) {
 			t.Errorf("AuthenticatedAt not preserved across rotation: got %v, want %v", newRT.AuthenticatedAt, originalAuthAt)
 		}
+		if newRT.Scope.String() != rt.Scope.String() {
+			t.Errorf("Scope not preserved across rotation: got %q, want %q", newRT.Scope.String(), rt.Scope.String())
+		}
 	})
 
 	t.Run("Save fails — old token not revoked (transactional rollback)", func(t *testing.T) {
@@ -224,13 +227,14 @@ func TestRefreshTokenUseCase(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		cmd         *RefreshTokenCommand
-		jwt         *mockJwtService
-		repo        *mockUserRepo
-		rtRepo      *mockRefreshTokenRepo
-		wantErrCode coreerror.ErrCode
-		wantToken   string
+		name             string
+		cmd              *RefreshTokenCommand
+		jwt              *mockJwtService
+		repo             *mockUserRepo
+		rtRepo           *mockRefreshTokenRepo
+		wantErrCode      coreerror.ErrCode
+		wantToken        string
+		wantIDTokenEmpty bool
 	}{
 		{
 			name: "success",
@@ -492,6 +496,22 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			rtRepo:      newMockRefreshTokenRepo(newValidRT()),
 			wantErrCode: autherrors.InvalidClient,
 		},
+		{
+			name: "scope without openid — id_token omitted",
+			cmd: &RefreshTokenCommand{
+				GrantType:    "refresh_token",
+				ClientID:     "APP_ID",
+				RefreshToken: "valid-refresh-token",
+			},
+			jwt:  &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			repo: newMockRepo(newTestUser()),
+			rtRepo: newMockRefreshTokenRepo(entity.NewRefreshToken(
+				"user-1", "",
+				&entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("email profile")},
+			)),
+			wantToken:        "new-access",
+			wantIDTokenEmpty: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -530,8 +550,14 @@ func TestRefreshTokenUseCase(t *testing.T) {
 			if resp.RefreshToken == "" {
 				t.Fatal("refresh_token should not be empty")
 			}
-			if resp.IDToken == "" {
-				t.Fatal("id_token should not be empty")
+			if tc.wantIDTokenEmpty {
+				if resp.IDToken != "" {
+					t.Errorf("id_token = %q, want empty", resp.IDToken)
+				}
+			} else {
+				if resp.IDToken == "" {
+					t.Fatal("id_token should not be empty")
+				}
 			}
 
 			// rotation: old token revoked, new token persisted, custom expire_secs honoured

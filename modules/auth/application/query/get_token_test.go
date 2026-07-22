@@ -20,15 +20,16 @@ func TestGetTokenUseCase(t *testing.T) {
 	defaultAllowlist := []string{"openid", "email", "profile", "phone"}
 
 	tests := []struct {
-		name        string
-		cmd         *GetTokenQuery
-		jwt         *mockJwtService
-		repo        *mockUserRepo
-		rtRepo      *mockRefreshTokenRepo
-		wantErrCode coreerror.ErrCode
-		wantToken   string
-		wantScope   string
-		wantExpires int
+		name             string
+		cmd              *GetTokenQuery
+		jwt              *mockJwtService
+		repo             *mockUserRepo
+		rtRepo           *mockRefreshTokenRepo
+		wantErrCode      coreerror.ErrCode
+		wantToken        string
+		wantScope        string
+		wantExpires      int
+		wantIDTokenEmpty bool
 	}{
 		{
 			name:      "success — no scope defaults to full allowlist",
@@ -137,6 +138,16 @@ func TestGetTokenUseCase(t *testing.T) {
 			rtRepo:      &mockRefreshTokenRepo{tokens: make(map[string]*entity.RefreshToken), saveErr: errors.New("db error")},
 			wantErrCode: autherrors.GenTokenFailed,
 		},
+		{
+			name:             "explicit scope without openid — id_token omitted",
+			cmd:              &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("email profile")},
+			jwt:              &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
+			repo:             newMockRepo(newTestUser()),
+			rtRepo:           newMockRefreshTokenRepo(),
+			wantToken:        "tok-access",
+			wantScope:        "email profile",
+			wantIDTokenEmpty: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -170,8 +181,14 @@ func TestGetTokenUseCase(t *testing.T) {
 			if resp.RefreshToken == "" {
 				t.Fatal("refresh_token should not be empty")
 			}
-			if resp.IDToken == "" {
-				t.Fatal("id_token should not be empty")
+			if tc.wantIDTokenEmpty {
+				if resp.IDToken != "" {
+					t.Errorf("id_token = %q, want empty", resp.IDToken)
+				}
+			} else {
+				if resp.IDToken == "" {
+					t.Fatal("id_token should not be empty")
+				}
 			}
 			if resp.TokenType != define.TokenTypeBearer {
 				t.Fatalf("token_type = %q, want %q", resp.TokenType, define.TokenTypeBearer)

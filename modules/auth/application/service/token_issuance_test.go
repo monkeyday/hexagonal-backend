@@ -9,12 +9,13 @@ import (
 )
 
 type mockJwtService struct {
-	accessToken  string
-	refreshToken string
-	idToken      string
-	accessErr    error
-	refreshErr   error
-	idTokenErr   error
+	accessToken      string
+	refreshToken     string
+	idToken          string
+	accessErr        error
+	refreshErr       error
+	idTokenErr       error
+	genIDTokenCalled bool
 }
 
 func (m *mockJwtService) GenAccessToken(_, _ string, _ int) (string, error) {
@@ -26,6 +27,7 @@ func (m *mockJwtService) GenRefreshToken(_ string) (string, error) {
 }
 
 func (m *mockJwtService) GenIDToken(_ port.IDTokenArgs) (string, error) {
+	m.genIDTokenCalled = true
 	return m.idToken, m.idTokenErr
 }
 
@@ -101,6 +103,53 @@ func TestTokenIssuanceService_IssueTokens(t *testing.T) {
 		}
 		if resp != nil {
 			t.Fatalf("expected nil response, got %+v", resp)
+		}
+	})
+
+	t.Run("scope includes openid — id_token issued", func(t *testing.T) {
+		jwtSvc := &mockJwtService{
+			accessToken:  "at",
+			refreshToken: "rt",
+			idToken:      "it",
+		}
+		svc := NewTokenIssuanceService(jwtSvc)
+		resp, err := svc.IssueTokens(IssueTokensArgs{
+			User:       user,
+			ClientID:   "client-1",
+			Scope:      entity.MustParseScope("openid"),
+			ExpireSecs: 3600,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.IDToken != "it" {
+			t.Errorf("IDToken = %q, want %q", resp.IDToken, "it")
+		}
+		if !jwtSvc.genIDTokenCalled {
+			t.Error("GenIDToken should have been called when scope contains openid")
+		}
+	})
+
+	t.Run("scope without openid — id_token skipped", func(t *testing.T) {
+		jwtSvc := &mockJwtService{
+			accessToken:  "at",
+			refreshToken: "rt",
+		}
+		svc := NewTokenIssuanceService(jwtSvc)
+		resp, err := svc.IssueTokens(IssueTokensArgs{
+			User:       user,
+			ClientID:   "client-1",
+			Scope:      entity.MustParseScope("email profile"),
+			ExpireSecs: 3600,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.IDToken != "" {
+			t.Errorf("IDToken = %q, want empty", resp.IDToken)
+		}
+		if jwtSvc.genIDTokenCalled {
+			t.Error("GenIDToken should not have been called when scope lacks openid")
 		}
 	})
 }
