@@ -28,18 +28,20 @@ jobs:
     timeout-minutes: 30
     services:
       mongo:
-        image: mongo:7
-        # The auth config requires credentials (Username/Password/AuthSource),
-        # so the server cannot talk to a no-auth Mongo — enable root auth here
-        # and mirror it in ci.env below.
+        # Atlas Local initializes a single-node replica set out of the box —
+        # required: refresh rotation runs inside a Mongo transaction
+        # (infrastructure/repository/mongo/client.go WithTransaction), which
+        # standalone Mongo rejects. Auth stays on (the server config requires
+        # credentials), mirrored in ci.env below.
+        image: mongodb/mongodb-atlas-local:8.2.4
         env:
-          MONGO_INITDB_ROOT_USERNAME: stress
-          MONGO_INITDB_ROOT_PASSWORD: stress
+          MONGODB_INITDB_ROOT_USERNAME: stress
+          MONGODB_INITDB_ROOT_PASSWORD: stress
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --quiet -u stress -p stress --eval 'db.adminCommand({ ping: 1 })'"
-          --health-interval 10s --health-timeout 5s --health-retries 10
+          --health-cmd "mongosh --quiet -u stress -p stress --eval 'db.hello().isWritablePrimary ? quit(0) : quit(1)'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
       redis:
         image: redis:7
         ports:
