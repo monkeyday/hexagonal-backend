@@ -32,8 +32,10 @@ jobs:
           restore-keys: golangci-lint-${{ runner.os }}-
       - name: Install golangci-lint
         run: |
-          curl -sSfL "https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin --strip-components=1 golangci-lint-2.12.2-linux-amd64/golangci-lint
+          curl -sSfLO "https://github.com/golangci/golangci-lint/releases/download/v2.12.2/golangci-lint-2.12.2-linux-amd64.tar.gz"
+          echo "8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553  golangci-lint-2.12.2-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf golangci-lint-2.12.2-linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 golangci-lint-2.12.2-linux-amd64/golangci-lint
+          rm golangci-lint-2.12.2-linux-amd64.tar.gz
       - run: golangci-lint run
 
   test:
@@ -212,8 +214,10 @@ jobs:
 
       - name: Install k6
         run: |
-          curl -sSfL "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin --strip-components=1 k6-v2.0.0-linux-amd64/k6
+          curl -sSfLO "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz"
+          echo "2ae87d976f6cdba17185bdd980d8819a3a98e9092c6f0638cd58272ecefc8b90  k6-v2.0.0-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf k6-v2.0.0-linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 k6-v2.0.0-linux-amd64/k6
+          rm k6-v2.0.0-linux-amd64.tar.gz
 
       - name: Run smoke tests
         env:
@@ -270,6 +274,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install gitleaks
-        run: curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+        run: |
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz -C /usr/local/bin gitleaks
+          rm gitleaks_8.30.1_linux_x64.tar.gz
       - name: Scan for secrets
         run: gitleaks detect --source . --redact
