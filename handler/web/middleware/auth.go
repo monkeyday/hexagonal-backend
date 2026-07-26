@@ -20,7 +20,9 @@ type TokenParser interface {
 // auth module's cache-key convention, keeping the delivery layer free of
 // module-specific knowledge.
 type RevocationChecker interface {
-	IsRevoked(ctx context.Context, jti string) (bool, error)
+	// IsRevoked reports whether the token's jti is blacklisted or its grant has been revoked.
+	// grantID is empty for tokens issued before grant linkage; that check is then skipped.
+	IsRevoked(ctx context.Context, jti string, grantID string) (bool, error)
 }
 
 const (
@@ -103,7 +105,7 @@ func verifyBearer(ctx *gin.Context, svc TokenParser, rev RevocationChecker) (*co
 		return nil, "", false
 	}
 	if rev != nil {
-		revoked, err := rev.IsRevoked(ctx.Request.Context(), claims.ID)
+		revoked, err := rev.IsRevoked(ctx.Request.Context(), claims.ID, claims.GrantID)
 		if err != nil || revoked {
 			return nil, "", false
 		}

@@ -210,6 +210,58 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 		}
 	})
 
+	t.Run("bearer with sid — grant marker written in cache", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-sid-marker", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = grantID
+		cache := newMockCache()
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-sid",
+					GrantID:   string(grantID),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(rt),
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache after logout with sid, not found", markerKey)
+		}
+	})
+
+	t.Run("legacy bearer (no sid) — no grant marker written", func(t *testing.T) {
+		cache := newMockCache()
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-legacy-marker",
+					GrantID:   "", // no sid
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(),
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for key := range cache.items {
+			if len(key) > len("revoked_grant:") && key[:len("revoked_grant:")] == "revoked_grant:" {
+				t.Errorf("expected no grant marker for legacy bearer, but found key %q", key)
+			}
+		}
+	})
+
 	t.Run("bearer with sid — only that grant's tokens revoked, same-user other grant untouched", func(t *testing.T) {
 		grantA := entity.NewGrantID()
 		grantB := entity.NewGrantID()

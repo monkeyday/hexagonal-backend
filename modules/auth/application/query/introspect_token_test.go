@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"errors"
+	"fmt"
 	coreerror "sc/core/error"
 	corejwt "sc/core/jwt"
 	"sc/core/usecase"
@@ -98,6 +99,34 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 			jwt:        &mockJwtService{parseClaims: validClaims},
 			cache:      &mockCache{items: make(map[string]any), getErr: errors.New("cache unavailable")},
 			wantActive: false,
+		},
+		{
+			name:  "grant revoked — inactive even though JTI is clean",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				Issuer:    "https://auth.example.com",
+				ID:        "jti-grant-check",
+				GrantID:   "grant-abc",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			cache:      newMockCache().seed(fmt.Sprintf(define.RevokedGrantCacheKey, "grant-abc"), true),
+			wantActive: false,
+		},
+		{
+			name:  "legacy token (no sid) — grant check skipped, JTI clean → active",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				Issuer:    "https://auth.example.com",
+				ID:        "jti-legacy",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+				Scope:     "openid",
+			}},
+			wantActive: true,
+			wantSub:    "user-1",
 		},
 	}
 

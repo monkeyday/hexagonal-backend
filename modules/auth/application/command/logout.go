@@ -72,6 +72,9 @@ func (uc *LogoutUseCase) revokeIfAuthenticated(ctx context.Context, accessToken 
 func (uc *LogoutUseCase) revokeGrantTokens(ctx context.Context, claims *corejwt.Claims) {
 	if claims.GrantID != "" {
 		_ = uc.refreshTokenRepo.RevokeAllForGrant(ctx, entity.GrantID(claims.GrantID))
+		if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, claims.GrantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+			log.Warn().Err(err).Str("grant_id", claims.GrantID).Msg("revoked_grant: cache set failed")
+		}
 		return
 	}
 	// Legacy fallback: tokens issued before grant linkage carry no sid; revoke by user.

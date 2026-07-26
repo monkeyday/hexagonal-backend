@@ -58,6 +58,12 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 			return &define.IntrospectResponse{Active: false}, nil
 		}
 	}
+	if claims.GrantID != "" && uc.cache != nil {
+		grantRevoked, err := uc.cache.GetErr(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, claims.GrantID), nil)
+		if err != nil || grantRevoked {
+			return &define.IntrospectResponse{Active: false}, nil
+		}
+	}
 
 	resp := &define.IntrospectResponse{
 		Active:    true,

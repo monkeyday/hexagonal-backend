@@ -267,6 +267,50 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 		}
 	})
 
+	t.Run("replayed token with GrantID — grant marker written in cache", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-grant-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = grantID
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-grant-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache after replay, not found", markerKey)
+		}
+	})
+
+	t.Run("replayed legacy token (empty GrantID) — no grant marker written", func(t *testing.T) {
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-legacy-marker", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = ""
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-legacy-marker"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+		if len(cache.items) != 0 {
+			t.Errorf("expected no cache entries for legacy replay, got %d: %v", len(cache.items), cache.items)
+		}
+	})
+
 	t.Run("expired token — family left intact", func(t *testing.T) {
 		expired := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "expired-token", Scope: entity.MustParseScope("openid")})
 		expired.ExpiresAt = time.Now().Add(-time.Minute)

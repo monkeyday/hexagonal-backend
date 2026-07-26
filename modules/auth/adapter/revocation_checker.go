@@ -18,6 +18,13 @@ func newRevocationChecker(c corecache.ReadErrorCache) *revocationChecker {
 	return &revocationChecker{cache: c}
 }
 
-func (r *revocationChecker) IsRevoked(ctx context.Context, jti string) (bool, error) {
-	return r.cache.GetErr(ctx, fmt.Sprintf(define.BlacklistCacheKey, jti), nil)
+func (r *revocationChecker) IsRevoked(ctx context.Context, jti string, grantID string) (bool, error) {
+	revoked, err := r.cache.GetErr(ctx, fmt.Sprintf(define.BlacklistCacheKey, jti), nil)
+	if err != nil || revoked {
+		return revoked, err
+	}
+	if grantID != "" {
+		return r.cache.GetErr(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, grantID), nil)
+	}
+	return false, nil
 }

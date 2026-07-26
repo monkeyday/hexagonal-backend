@@ -25,23 +25,30 @@ func (m *mockJwtService) ParseJWT(_ string) (*corejwt.Claims, error) {
 
 // mockRevocationChecker implements RevocationChecker for auth middleware tests.
 type mockRevocationChecker struct {
-	revoked map[string]bool
-	err     error // if set, IsRevoked returns this error
+	revoked       map[string]bool // revoked JTIs
+	revokedGrants map[string]bool // revoked grant IDs
+	err           error           // if set, IsRevoked returns this error for any call
 }
 
 func newMockRevocationChecker(revokedJTIs ...string) *mockRevocationChecker {
-	m := &mockRevocationChecker{revoked: make(map[string]bool)}
+	m := &mockRevocationChecker{revoked: make(map[string]bool), revokedGrants: make(map[string]bool)}
 	for _, jti := range revokedJTIs {
 		m.revoked[jti] = true
 	}
 	return m
 }
 
-func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string) (bool, error) {
+func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string, grantID string) (bool, error) {
 	if m.err != nil {
 		return false, m.err
 	}
-	return m.revoked[jti], nil
+	if m.revoked[jti] {
+		return true, nil
+	}
+	if grantID != "" && m.revokedGrants[grantID] {
+		return true, nil
+	}
+	return false, nil
 }
 
 func newExtractTokenRouter() *gin.Engine {
@@ -250,6 +257,41 @@ func TestAuthenticate(t *testing.T) {
 			authHeader:  "Bearer valid-token",
 			svc:         &mockJwtService{claims: revokedClaims},
 			rev:         &mockRevocationChecker{err: errors.New("redis unavailable")},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:       "token whose grant is revoked — 401 even though JTI is clean",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "clean-jti", GrantID: "revoked-grant",
+			}},
+			rev: &mockRevocationChecker{
+				revoked:       map[string]bool{},
+				revokedGrants: map[string]bool{"revoked-grant": true},
+			},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:       "legacy token (no sid) with clean jti — authenticates",
+			authHeader: "Bearer valid-token",
+			svc:        &mockJwtService{claims: &corejwt.Claims{Subject: "user-42", ID: "clean-jti-2"}},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:       "cache error on grant check — fail-closed 401",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "jti-grant-err", GrantID: "some-grant",
+			}},
+			rev: &mockRevocationChecker{
+				revoked:       map[string]bool{},
+				revokedGrants: map[string]bool{},
+				err:           errors.New("cache unavailable"),
+			},
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},

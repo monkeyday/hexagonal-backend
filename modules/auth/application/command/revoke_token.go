@@ -88,7 +88,7 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 			if c.CallerID != "" && rt.UserID != entity.UserID(c.CallerID) {
 				return nil, nil // RFC 7009 §2.2: wrong owner → treat as unknown
 			}
-			return nil, uc.revokeConfirmedRefreshToken(ctx, entity.Hash(c.Token))
+			return nil, uc.revokeConfirmedRefreshToken(ctx, rt)
 		}
 		if !errors.Is(lookupErr, coreerror.ErrNotFound) {
 			log.Warn().Err(lookupErr).Msg("revoke: refresh token lookup failed after access-token path")
@@ -104,7 +104,7 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 		if c.CallerID != "" && rt.UserID != entity.UserID(c.CallerID) {
 			return nil, nil // RFC 7009 §2.2: wrong owner → treat as unknown
 		}
-		return nil, uc.revokeConfirmedRefreshToken(ctx, entity.Hash(c.Token))
+		return nil, uc.revokeConfirmedRefreshToken(ctx, rt)
 
 	case errors.Is(lookupErr, coreerror.ErrNotFound):
 		// Not in RT store → extend search to AT per RFC 7009 §2.1.
@@ -126,14 +126,26 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 	}
 }
 
-// revokeConfirmedRefreshToken revokes a token already confirmed as caller-owned.
-// ErrNotFound means it was revoked between FindByTokenHash and now — treat as success.
-func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, tokenHash string) error {
-	if err := uc.refreshTokenRepo.RevokeByTokenHash(ctx, tokenHash); err != nil {
+// revokeConfirmedRefreshToken revokes a token already confirmed as caller-owned,
+// then cascades the revocation to all sibling tokens in the same grant and writes
+// a cache marker so stateless access tokens stop verifying (RFC 7009 §2.1).
+// ErrNotFound from RevokeByTokenHash means the token was revoked in a concurrent
+// request between FindByTokenHash and now — treat as success without sweeping the
+// grant (the concurrent winner already did it).
+func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, rt *entity.RefreshToken) error {
+	if err := uc.refreshTokenRepo.RevokeByTokenHash(ctx, rt.TokenHash); err != nil {
 		if errors.Is(err, coreerror.ErrNotFound) {
 			return nil
 		}
 		return err
+	}
+	if rt.GrantID != "" {
+		if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
+			return err
+		}
+		if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, rt.GrantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+			return err
+		}
 	}
 	uc.revocationsCounter.Add(1)
 	log.Info().Str("token_type", "refresh_token").Msg("token revoked")

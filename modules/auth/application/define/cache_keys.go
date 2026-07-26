@@ -7,4 +7,6 @@ const (
 	// ForgotPasswordRateKey is keyed by a hash of the email so plaintext addresses
 	// never land in cache keys (see email-encryption policy).
 	ForgotPasswordRateKey = "pwreset:rl:%s"
+	// RevokedGrantCacheKey marks an entire grant as revoked; %s = entity.GrantID (the `sid` claim).
+	RevokedGrantCacheKey = "revoked_grant:%s"
 )

@@ -277,6 +277,44 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		}
 	})
 
+	t.Run("revoke refresh token with GrantID — siblings revoked and grant marker written", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		rt1 := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-1", Scope: entity.MustParseScope("openid")})
+		rt1.GrantID = grantID
+		rt2 := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-2", Scope: entity.MustParseScope("openid")})
+		rt2.GrantID = grantID
+		cache := newMockCache()
+		rtRepo := newMockRefreshTokenRepo(rt1, rt2)
+		_, err := newMod(&mockJwtService{}, cache, newMockRepo(newTestUser()), rtRepo).Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertRTRevoked(t, rtRepo, "rt-grant-1")
+		assertRTRevoked(t, rtRepo, "rt-grant-2") // grant-wide cascade
+		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache, not found", markerKey)
+		}
+	})
+
+	t.Run("revoke legacy refresh token (empty GrantID) — only that token revoked, no grant marker", func(t *testing.T) {
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = "" // legacy token issued before grant linkage
+		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-sib", Scope: entity.MustParseScope("openid")})
+		sibling.GrantID = ""
+		cache := newMockCache()
+		rtRepo := newMockRefreshTokenRepo(rt, sibling)
+		_, err := newMod(&mockJwtService{}, cache, newMockRepo(newTestUser()), rtRepo).Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-legacy"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertRTRevoked(t, rtRepo, "rt-legacy")
+		assertRTNotRevoked(t, rtRepo, "rt-legacy-sib") // legacy: no grant sweep
+		if len(cache.items) != 0 {
+			t.Errorf("expected empty cache for legacy token, got %d entries: %v", len(cache.items), cache.items)
+		}
+	})
+
 	t.Run("missing token — validation error", func(t *testing.T) {
 		_, err := newMod(&mockJwtService{}, newMockCache(), newMockRepo(), newMockRefreshTokenRepo()).Dispatch(ctx, &RevokeTokenCommand{})
 		if err == nil {

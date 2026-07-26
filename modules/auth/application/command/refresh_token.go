@@ -3,7 +3,9 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	corecache "sc/core/cache"
 	coreerror "sc/core/error"
 	coreuow "sc/core/uow"
 	"sc/core/usecase"
@@ -28,6 +30,7 @@ type RefreshTokenCommand struct {
 
 type RefreshTokenUseCase struct {
 	uow                  coreuow.UnitOfWork
+	cache                corecache.Cache
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
 	tokenIssuanceService *domainService.TokenIssuanceService
@@ -37,10 +40,24 @@ type RefreshTokenUseCase struct {
 func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
 	return &RefreshTokenUseCase{
 		uow:                  deps.UoW,
+		cache:                deps.Cache,
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
 		tokenIssuanceService: domainService.NewTokenIssuanceService(deps.JWTSvc),
 		clientAuthenticator:  domainService.NewClientAuthenticator(deps.ClientRegistry),
+	}
+}
+
+// writeRevokedGrantMarker caches a grant-revocation marker so that stateless
+// sibling access tokens issued under the same grant stop verifying.
+// Errors are logged but not propagated — revocation of the refresh-token family
+// already happened; the marker is best-effort in the replay path.
+func (uc *RefreshTokenUseCase) writeRevokedGrantMarker(ctx context.Context, grantID entity.GrantID) {
+	if uc.cache == nil {
+		return
+	}
+	if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, grantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+		log.Error().Err(err).Str("grant_id", string(grantID)).Msg("revoked_grant: cache set failed after replay")
 	}
 }
 
@@ -119,6 +136,7 @@ func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw s
 			if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
 				log.Error().Err(err).Str("grant_id", string(rt.GrantID)).Msg("failed to revoke token family after replay")
 			}
+			uc.writeRevokedGrantMarker(ctx, rt.GrantID)
 		} else {
 			// Legacy fallback: tokens issued before grant linkage carry no GrantID; revoke by user.
 			log.Warn().Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for user")
