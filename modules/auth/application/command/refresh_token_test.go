@@ -73,9 +73,10 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		}
 	})
 
-	t.Run("rotation preserves AuthenticatedAt", func(t *testing.T) {
+	t.Run("rotation preserves AuthenticatedAt and GrantID", func(t *testing.T) {
 		rt := newValidRT()
 		originalAuthAt := rt.AuthenticatedAt
+		originalGrantID := rt.GrantID
 		rtRepo := newMockRefreshTokenRepo(rt)
 		mod := usecase.NewRegistry()
 		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
@@ -102,6 +103,9 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		}
 		if !newRT.AuthenticatedAt.Equal(originalAuthAt) {
 			t.Errorf("AuthenticatedAt not preserved across rotation: got %v, want %v", newRT.AuthenticatedAt, originalAuthAt)
+		}
+		if newRT.GrantID != originalGrantID {
+			t.Errorf("GrantID not preserved across rotation: got %q, want %q", newRT.GrantID, originalGrantID)
 		}
 		if newRT.Scope.String() != rt.Scope.String() {
 			t.Errorf("Scope not preserved across rotation: got %q, want %q", newRT.Scope.String(), rt.Scope.String())

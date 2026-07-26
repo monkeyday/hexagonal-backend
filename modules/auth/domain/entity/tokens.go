@@ -20,6 +20,7 @@ type RefreshToken struct {
 	ID              string
 	UserID          UserID
 	ClientID        ClientID // client the token was issued to; empty when the grant had no authenticated client (password grant)
+	GrantID         GrantID
 	TokenHash       string
 	Scope           Scope
 	DeviceID        string
@@ -35,6 +36,7 @@ func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *Re
 		ID:              uuid.NewString(),
 		UserID:          userID,
 		ClientID:        clientID,
+		GrantID:         NewGrantID(),
 		TokenHash:       Hash(tokens.RefreshToken),
 		Scope:           tokens.Scope,
 		AuthenticatedAt: now,
@@ -45,10 +47,16 @@ func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *Re
 
 // Rotate creates a new RefreshToken for token rotation, carrying forward the stable
 // ClientID, AuthenticatedAt and DeviceID from the original authentication event.
+// GrantID is carried forward when non-empty; a legacy token (stored before this
+// field existed) has an empty GrantID and joins a freshly minted grant on its first
+// rotation — the intended expand/contract migration behaviour (docs/grant-linkage.md §5).
 func (rt *RefreshToken) Rotate(userID UserID, tokens *IssuedTokens) *RefreshToken {
 	n := NewRefreshToken(userID, rt.ClientID, tokens)
 	n.AuthenticatedAt = rt.AuthenticatedAt
 	n.DeviceID = rt.DeviceID
+	if rt.GrantID != "" {
+		n.GrantID = rt.GrantID
+	}
 	return n
 }
 

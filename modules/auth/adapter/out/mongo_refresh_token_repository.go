@@ -41,6 +41,12 @@ func NewMongoRefreshTokenRepository(client *mongorepo.MongoClient) (*MongoRefres
 			},
 		},
 		{
+			Keys: bson.D{
+				{Key: "grant_id", Value: 1},
+				{Key: "revoked_at", Value: 1},
+			},
+		},
+		{
 			Keys:    bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().SetExpireAfterSeconds(0),
 		},

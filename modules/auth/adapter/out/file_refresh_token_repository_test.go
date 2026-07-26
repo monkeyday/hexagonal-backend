@@ -25,6 +25,7 @@ func newTestRefreshToken(id, userID, tokenHash string, expiresIn time.Duration) 
 	return &entity.RefreshToken{
 		ID:              id,
 		UserID:          entity.UserID(userID),
+		GrantID:         entity.NewGrantID(),
 		TokenHash:       tokenHash,
 		Scope:           entity.MustParseScope("openid email"),
 		DeviceID:        "device-1",
@@ -41,6 +42,9 @@ func assertRefreshTokenEqual(t *testing.T, want, got *entity.RefreshToken) {
 	}
 	if got.UserID != want.UserID {
 		t.Errorf("UserID: got %q, want %q", got.UserID, want.UserID)
+	}
+	if got.GrantID != want.GrantID {
+		t.Errorf("GrantID: got %q, want %q", got.GrantID, want.GrantID)
 	}
 	if got.TokenHash != want.TokenHash {
 		t.Errorf("TokenHash: got %q, want %q", got.TokenHash, want.TokenHash)
