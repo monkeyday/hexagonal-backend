@@ -167,6 +167,12 @@ go run cmd/backend/main.go
 
 Client starts at **http://localhost:3000** — click "Login with IdP" to initiate the flow.
 
+It targets `http://localhost:9876` by default. Set `AUTH_SERVER_URL` to point it at another IdP — the value must include a scheme and a host, or the client exits at startup:
+
+```sh
+AUTH_SERVER_URL=https://auth.example.com go run cmd/backend/main.go
+```
+
 ---
 
 ## Docker
