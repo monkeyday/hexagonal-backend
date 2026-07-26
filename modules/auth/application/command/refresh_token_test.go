@@ -77,11 +77,12 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		rt := newValidRT()
 		originalAuthAt := rt.AuthenticatedAt
 		originalGrantID := rt.GrantID
+		jwtSvc := &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"}
 		rtRepo := newMockRefreshTokenRepo(rt)
 		mod := usecase.NewRegistry()
 		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
 			UoW:              &mockUoW{},
-			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			JWTSvc:           jwtSvc,
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
@@ -107,8 +108,51 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		if newRT.GrantID != originalGrantID {
 			t.Errorf("GrantID not preserved across rotation: got %q, want %q", newRT.GrantID, originalGrantID)
 		}
+		// sid/grant handed to issuance equals the original refresh token's GrantID
+		if jwtSvc.capturedAccessGrantID != string(originalGrantID) {
+			t.Errorf("sid passed to GenAccessToken = %q, want %q", jwtSvc.capturedAccessGrantID, originalGrantID)
+		}
 		if newRT.Scope.String() != rt.Scope.String() {
 			t.Errorf("Scope not preserved across rotation: got %q, want %q", newRT.Scope.String(), rt.Scope.String())
+		}
+	})
+
+	t.Run("legacy token with empty GrantID — rotated token gets a fresh non-empty grant matching issuance", func(t *testing.T) {
+		// Simulate a refresh token stored before grant linkage landed (GrantID == "").
+		rt := newValidRT()
+		rt.GrantID = "" // legacy token
+		jwtSvc := &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"}
+		rtRepo := newMockRefreshTokenRepo(rt)
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           jwtSvc,
+			UserRepo:         newMockRepo(user),
+			RefreshTokenRepo: rtRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+
+		resp, err := mod.Dispatch(ctx, &RefreshTokenCommand{
+			GrantType:    "refresh_token",
+			ClientID:     "APP_ID",
+			RefreshToken: "valid-refresh-token",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		newHash := entity.Hash(resp.(*define.TokenResponse).RefreshToken)
+		newRT := rtRepo.tokens[newHash]
+		if newRT == nil {
+			t.Fatal("new refresh token not found in repo")
+		}
+		if newRT.GrantID == "" {
+			t.Error("rotated token from a legacy (empty GrantID) original must have a non-empty GrantID")
+		}
+		// The grant used for issuance (captured by the mock) must equal the rotated token's GrantID
+		if string(newRT.GrantID) != jwtSvc.capturedAccessGrantID {
+			t.Errorf("rotated GrantID = %q, want same as issuance grantID = %q",
+				newRT.GrantID, jwtSvc.capturedAccessGrantID)
 		}
 	})
 

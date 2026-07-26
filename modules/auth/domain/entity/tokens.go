@@ -15,6 +15,7 @@ type IssuedTokens struct {
 	RefreshToken string
 	IDToken      string
 	Scope        Scope
+	GrantID      GrantID
 }
 type RefreshToken struct {
 	ID              string
@@ -32,11 +33,18 @@ type RefreshToken struct {
 
 func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *RefreshToken {
 	now := time.Now()
+	// Normal birthplace of a grant is IssueTokens (token_issuance.go); this
+	// fallback keeps the invariant "a RefreshToken always has a grant" for
+	// callers that construct IssuedTokens directly (e.g. test fixtures).
+	grantID := tokens.GrantID
+	if grantID == "" {
+		grantID = NewGrantID()
+	}
 	return &RefreshToken{
 		ID:              uuid.NewString(),
 		UserID:          userID,
 		ClientID:        clientID,
-		GrantID:         NewGrantID(),
+		GrantID:         grantID,
 		TokenHash:       Hash(tokens.RefreshToken),
 		Scope:           tokens.Scope,
 		AuthenticatedAt: now,
@@ -47,9 +55,7 @@ func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *Re
 
 // Rotate creates a new RefreshToken for token rotation, carrying forward the stable
 // ClientID, AuthenticatedAt and DeviceID from the original authentication event.
-// GrantID is carried forward when non-empty; a legacy token (stored before this
-// field existed) has an empty GrantID and joins a freshly minted grant on its first
-// rotation — the intended expand/contract migration behaviour (docs/grant-linkage.md §5).
+// The grant is carried forward from the rotated token.
 func (rt *RefreshToken) Rotate(userID UserID, tokens *IssuedTokens) *RefreshToken {
 	n := NewRefreshToken(userID, rt.ClientID, tokens)
 	n.AuthenticatedAt = rt.AuthenticatedAt

@@ -131,6 +131,7 @@ func newAuthRouter(svc TokenParser, rev *mockRevocationChecker) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{
 			"user_id":      c.GetString(UserIdKey),
 			"access_token": c.GetString(TokenKey),
+			"grant_id":     c.GetString(GrantIdKey),
 		})
 	})
 	return r
@@ -280,4 +281,34 @@ func TestAuthenticate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthenticate_GrantIdKey(t *testing.T) {
+	t.Run("token with sid — GrantIdKey set in context", func(t *testing.T) {
+		claims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "jti-1", GrantID: "grant-abc"}
+		r := newAuthRouter(&mockJwtService{claims: claims}, newMockRevocationChecker())
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		assertBodyContains(t, w.Body.Bytes(), "grant-abc")
+	})
+
+	t.Run("token without sid (legacy) — authenticates, GrantIdKey empty", func(t *testing.T) {
+		claims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "jti-2"}
+		r := newAuthRouter(&mockJwtService{claims: claims}, newMockRevocationChecker())
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("legacy token without sid must still authenticate, got status %d", w.Code)
+		}
+		assertBodyContains(t, w.Body.Bytes(), `"grant_id":""`)
+	})
 }

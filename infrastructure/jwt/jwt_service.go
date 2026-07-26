@@ -18,6 +18,19 @@ import (
 )
 
 const (
+	subClaim           = "sub"
+	audClaim           = "aud"
+	issClaim           = "iss"
+	iatClaim           = "iat"
+	expClaim           = "exp"
+	jtiClaim           = "jti"
+	scopeClaim         = "scope"
+	emailClaim         = "email"
+	emailVerifiedClaim = "email_verified"
+	nonceClaim         = "nonce"
+	// sidClaim carries the domain's GrantID on the wire (grant-linkage.md §2).
+	sidClaim = "sid"
+
 	tokenUseClaim  = "token_use"
 	tokenUseAccess = "access"
 	tokenUseID     = "id"
@@ -71,18 +84,36 @@ func (j *JWTService) Close() {
 	svc = nil
 }
 
-func (j *JWTService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
+// IDTokenArgs groups the parameters for ID-token generation.
+// Domain name GrantID maps to the OIDC wire claim "sid" (grant-linkage.md §2).
+type IDTokenArgs struct {
+	UserID        string
+	ClientID      string
+	Email         string
+	Nonce         string
+	GrantID       string
+	EmailVerified bool
+	ExpireSecs    int
+}
+
+func (j *JWTService) GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error) {
 	now := time.Now()
-	return j.signToken(jwt.MapClaims{
-		"sub":         userID,
-		"aud":         accessTokenAudience,
-		"scope":       scope,
-		"iat":         now.Unix(),
-		"exp":         now.Add(time.Second * time.Duration(expireSecs)).Unix(),
-		"jti":         uuid.NewString(),
-		"iss":         j.Issuer,
+	claims := jwt.MapClaims{
+		subClaim:      userID,
+		audClaim:      accessTokenAudience,
+		scopeClaim:    scope,
+		iatClaim:      now.Unix(),
+		expClaim:      now.Add(time.Second * time.Duration(expireSecs)).Unix(),
+		jtiClaim:      uuid.NewString(),
+		issClaim:      j.Issuer,
 		tokenUseClaim: tokenUseAccess,
-	}, userID)
+	}
+	// Domain name GrantID maps to the OIDC wire claim "sid" (grant-linkage.md §2).
+	// Omit when empty so tokens issued before grant linkage have no sid claim.
+	if grantID != "" {
+		claims[sidClaim] = grantID
+	}
+	return j.signToken(claims, userID)
 }
 
 func (j *JWTService) GenRefreshToken(userID string) (string, error) {
@@ -93,22 +124,27 @@ func (j *JWTService) GenRefreshToken(userID string) (string, error) {
 	return tok, nil
 }
 
-func (j *JWTService) GenIDToken(userID, clientID, email, nonce string, emailVerified bool, expireSecs int) (string, error) {
+func (j *JWTService) GenIDToken(args IDTokenArgs) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"iss":            j.Issuer,
-		"sub":            userID,
-		"aud":            clientID,
-		"iat":            now.Unix(),
-		"exp":            now.Add(time.Second * time.Duration(expireSecs)).Unix(),
-		"email":          email,
-		"email_verified": emailVerified,
-		tokenUseClaim:    tokenUseID,
+		issClaim:           j.Issuer,
+		subClaim:           args.UserID,
+		audClaim:           args.ClientID,
+		iatClaim:           now.Unix(),
+		expClaim:           now.Add(time.Second * time.Duration(args.ExpireSecs)).Unix(),
+		emailClaim:         args.Email,
+		emailVerifiedClaim: args.EmailVerified,
+		tokenUseClaim:      tokenUseID,
 	}
-	if nonce != "" {
-		claims["nonce"] = nonce
+	if args.Nonce != "" {
+		claims[nonceClaim] = args.Nonce
 	}
-	return j.signToken(claims, userID)
+	// Domain name GrantID maps to the OIDC wire claim "sid" (grant-linkage.md §2).
+	// Omit when empty so tokens issued before grant linkage have no sid claim.
+	if args.GrantID != "" {
+		claims[sidClaim] = args.GrantID
+	}
+	return j.signToken(claims, args.UserID)
 }
 
 func (j *JWTService) GetJWKS() map[string][]corejwt.JWK {
@@ -121,6 +157,9 @@ type accessTokenClaims struct {
 	jwt.RegisteredClaims
 	Scope    string `json:"scope"`
 	TokenUse string `json:"token_use"`
+	// Domain name GrantID maps to the OIDC wire claim "sid" (grant-linkage.md §2).
+	// Missing sid is not an error — it means a token issued before grant linkage.
+	Sid string `json:"sid,omitempty"`
 }
 
 type idTokenClaims struct {
@@ -156,6 +195,9 @@ func (j *JWTService) ParseJWT(tokenString string) (*corejwt.Claims, error) {
 		Issuer:   parsed.Issuer,
 		Audience: []string(parsed.Audience),
 		ID:       parsed.ID,
+		// Domain name GrantID maps to the OIDC wire claim "sid" (grant-linkage.md §2).
+		// Left as zero value when absent — expand/contract migration (grant-linkage.md §5).
+		GrantID: parsed.Sid,
 	}
 	if parsed.ExpiresAt != nil {
 		out.ExpiresAt = &parsed.ExpiresAt.Time

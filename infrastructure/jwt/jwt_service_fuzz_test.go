@@ -15,11 +15,11 @@ import (
 func FuzzParseJWT(f *testing.F) {
 	svc := newTestService(f)
 
-	access, err := svc.GenAccessToken("user-1", "openid email", 3600)
+	access, err := svc.GenAccessToken("user-1", "openid email", "grant-1", 3600)
 	if err != nil {
 		f.Fatalf("GenAccessToken: %v", err)
 	}
-	id, err := svc.GenIDToken("user-1", "client-1", "a@b.io", "nonce", true, 3600)
+	id, err := svc.GenIDToken(IDTokenArgs{UserID: "user-1", ClientID: "client-1", Email: "a@b.io", Nonce: "nonce", EmailVerified: true, ExpireSecs: 3600})
 	if err != nil {
 		f.Fatalf("GenIDToken: %v", err)
 	}

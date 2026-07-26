@@ -28,12 +28,14 @@ type mockJwtService struct {
 	// captured call arguments
 	capturedAccessUserID     string
 	capturedAccessScope      string
+	capturedAccessGrantID    string
 	capturedAccessExpireSecs int
 }
 
-func (m *mockJwtService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
+func (m *mockJwtService) GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error) {
 	m.capturedAccessUserID = userID
 	m.capturedAccessScope = scope
+	m.capturedAccessGrantID = grantID
 	m.capturedAccessExpireSecs = expireSecs
 	return m.accessToken, m.accessErr
 }

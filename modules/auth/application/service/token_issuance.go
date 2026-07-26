@@ -16,15 +16,26 @@ func NewTokenIssuanceService(issuer port.TokenIssuer) *TokenIssuanceService {
 }
 
 type IssueTokensArgs struct {
-	User       *entity.User
-	ClientID   entity.ClientID
-	Nonce      string
-	Scope      entity.Scope
-	ExpireSecs int
+	User            *entity.User
+	ClientID        entity.ClientID
+	Nonce           string
+	Scope           entity.Scope
+	ExpireSecs      int
+	ExistingGrantID entity.GrantID // empty = a new authentication event; a fresh grant is minted
 }
 
 func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedTokens, error) {
-	accessToken, err := s.issuer.GenAccessToken(string(req.User.ID), req.Scope.String(), req.ExpireSecs)
+	// Resolve grant exactly once. A refresh token stored before grant linkage
+	// landed has an empty ExistingGrantID, so it joins a freshly minted grant
+	// on its first rotation. Because grantID feeds both GenAccessToken and the
+	// returned IssuedTokens, the sid claim in the access token and the GrantID
+	// on the new refresh token cannot disagree (grant-linkage.md §5).
+	grantID := req.ExistingGrantID
+	if grantID == "" {
+		grantID = entity.NewGrantID()
+	}
+
+	accessToken, err := s.issuer.GenAccessToken(string(req.User.ID), req.Scope.String(), string(grantID), req.ExpireSecs)
 	if err != nil {
 		return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
 	}
@@ -41,6 +52,7 @@ func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedT
 			ClientID:      string(req.ClientID),
 			Email:         req.User.Email,
 			Nonce:         req.Nonce,
+			GrantID:       string(grantID),
 			EmailVerified: req.User.EmailVerified,
 			ExpireSecs:    req.ExpireSecs,
 		})
@@ -54,5 +66,6 @@ func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedT
 		RefreshToken: rawRefreshToken,
 		IDToken:      idToken,
 		Scope:        req.Scope,
+		GrantID:      grantID,
 	}, nil
 }

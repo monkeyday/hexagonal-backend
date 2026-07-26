@@ -83,10 +83,11 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 	expireSecs := define.ResolveExpirySecs(c.ExpireSecs)
 
 	tokens, err := uc.tokenIssuanceService.IssueTokens(domainService.IssueTokensArgs{
-		User:       user,
-		ClientID:   client.ID,
-		Scope:      rt.Scope,
-		ExpireSecs: expireSecs,
+		User:            user,
+		ClientID:        client.ID,
+		Scope:           rt.Scope,
+		ExpireSecs:      expireSecs,
+		ExistingGrantID: rt.GrantID,
 	})
 	if err != nil {
 		return nil, err

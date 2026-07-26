@@ -30,6 +30,7 @@ const (
 	TokenKey              = "access_token"
 	IssuerKey             = "issuer"
 	UserIdKey             = "user_id"
+	GrantIdKey            = "grant_id"
 	BasicClientIDKey      = "basic_client_id"
 	BasicClientSecretKey  = "basic_client_secret"
 )
@@ -114,6 +115,9 @@ func setBearerIdentity(ctx *gin.Context, claims *corejwt.Claims, token string) {
 	ctx.Set(TokenKey, token)
 	ctx.Set(IssuerKey, claims.Issuer)
 	ctx.Set(UserIdKey, claims.Subject)
+	// GrantIdKey is empty for tokens issued before grant linkage (legacy tokens
+	// without a sid claim); the request proceeds normally in that case.
+	ctx.Set(GrantIdKey, claims.GrantID)
 }
 
 // extractBearerToken extracts the token from an Authorization header.

@@ -29,15 +29,18 @@ type mockJwtService struct {
 	// captured call arguments — guarded by mu
 	capturedAccessUserID     string
 	capturedAccessScope      string
+	capturedAccessGrantID    string
 	capturedAccessExpireSecs int
 	capturedIDTokenClientID  string
 	capturedIDTokenNonce     string
+	capturedIDTokenGrantID   string
 }
 
-func (m *mockJwtService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
+func (m *mockJwtService) GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error) {
 	m.mu.Lock()
 	m.capturedAccessUserID = userID
 	m.capturedAccessScope = scope
+	m.capturedAccessGrantID = grantID
 	m.capturedAccessExpireSecs = expireSecs
 	m.mu.Unlock()
 	return m.accessToken, m.accessErr
@@ -51,6 +54,7 @@ func (m *mockJwtService) GenIDToken(args port.IDTokenArgs) (string, error) {
 	m.mu.Lock()
 	m.capturedIDTokenClientID = args.ClientID
 	m.capturedIDTokenNonce = args.Nonce
+	m.capturedIDTokenGrantID = args.GrantID
 	m.mu.Unlock()
 	return "mock-id-token", m.idTokenErr
 }

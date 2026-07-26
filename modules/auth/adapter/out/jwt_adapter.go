@@ -18,8 +18,8 @@ func NewJWTServiceAdapter(svc *infrajwt.JWTService) port.TokenService {
 	return &JWTServiceAdapter{svc: svc}
 }
 
-func (a *JWTServiceAdapter) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
-	return a.svc.GenAccessToken(userID, scope, expireSecs)
+func (a *JWTServiceAdapter) GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error) {
+	return a.svc.GenAccessToken(userID, scope, grantID, expireSecs)
 }
 
 func (a *JWTServiceAdapter) GenRefreshToken(userID string) (string, error) {
@@ -27,7 +27,15 @@ func (a *JWTServiceAdapter) GenRefreshToken(userID string) (string, error) {
 }
 
 func (a *JWTServiceAdapter) GenIDToken(args port.IDTokenArgs) (string, error) {
-	return a.svc.GenIDToken(args.UserID, args.ClientID, args.Email, args.Nonce, args.EmailVerified, args.ExpireSecs)
+	return a.svc.GenIDToken(infrajwt.IDTokenArgs{
+		UserID:        args.UserID,
+		ClientID:      args.ClientID,
+		Email:         args.Email,
+		Nonce:         args.Nonce,
+		GrantID:       args.GrantID,
+		EmailVerified: args.EmailVerified,
+		ExpireSecs:    args.ExpireSecs,
+	})
 }
 
 func (a *JWTServiceAdapter) ParseJWT(tokenString string) (*corejwt.Claims, error) {
