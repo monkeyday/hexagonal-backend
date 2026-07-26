@@ -102,3 +102,10 @@ func (r *MongoRefreshTokenRepository) RevokeAllForUser(ctx context.Context, user
 	_, err := r.col.UpdateMany(ctx, filter, update)
 	return err
 }
+
+func (r *MongoRefreshTokenRepository) RevokeAllForGrant(ctx context.Context, grantID entity.GrantID) error {
+	filter := bson.D{{Key: "grant_id", Value: string(grantID)}, {Key: "revoked_at", Value: nil}}
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "revoked_at", Value: time.Now()}}}}
+	_, err := r.col.UpdateMany(ctx, filter, update)
+	return err
+}

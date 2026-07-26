@@ -148,4 +148,47 @@ func runRefreshTokenContract(t *testing.T, newRepo func(t *testing.T) port.Refre
 			t.Error("userB's token should not be revoked")
 		}
 	})
+
+	t.Run("RevokeAllForGrant revokes only the target grant's active tokens", func(t *testing.T) {
+		repo := newRepo(t)
+		userA := entity.UserID("user-a")
+
+		grantX := entity.NewGrantID()
+		grantY := entity.NewGrantID()
+
+		rtX1 := newTestRefreshToken("rt-x1", string(userA), "hash-x1", 30*24*time.Hour)
+		rtX1.GrantID = grantX
+		rtX2 := newTestRefreshToken("rt-x2", string(userA), "hash-x2", 30*24*time.Hour)
+		rtX2.GrantID = grantX
+		rtY := newTestRefreshToken("rt-y1", string(userA), "hash-y1", 30*24*time.Hour)
+		rtY.GrantID = grantY
+
+		for _, rt := range []*entity.RefreshToken{rtX1, rtX2, rtY} {
+			if err := repo.Save(ctx, rt); err != nil {
+				t.Fatalf("Save %q: %v", rt.ID, err)
+			}
+		}
+
+		if err := repo.RevokeAllForGrant(ctx, grantX); err != nil {
+			t.Fatalf("RevokeAllForGrant: %v", err)
+		}
+
+		for _, hash := range []string{rtX1.TokenHash, rtX2.TokenHash} {
+			found, err := repo.FindByTokenHash(ctx, hash)
+			if err != nil {
+				t.Fatalf("FindByTokenHash(%q): %v", hash, err)
+			}
+			if found.RevokedAt == nil {
+				t.Errorf("token %q should be revoked after RevokeAllForGrant", hash)
+			}
+		}
+
+		foundY, err := repo.FindByTokenHash(ctx, rtY.TokenHash)
+		if err != nil {
+			t.Fatalf("FindByTokenHash(grantY): %v", err)
+		}
+		if foundY.RevokedAt != nil {
+			t.Error("grantY's token should not be revoked")
+		}
+	})
 }

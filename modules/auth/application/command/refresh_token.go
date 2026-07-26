@@ -114,9 +114,17 @@ func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw s
 		return nil, autherrors.NewErrInvalidRefreshToken()
 	}
 	if rt.RevokedAt != nil {
-		log.Warn().Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for user")
-		if err := uc.refreshTokenRepo.RevokeAllForUser(ctx, rt.UserID); err != nil {
-			log.Error().Err(err).Str("user_id", string(rt.UserID)).Msg("failed to revoke token family after replay")
+		if rt.GrantID != "" {
+			log.Warn().Str("grant_id", string(rt.GrantID)).Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for grant")
+			if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
+				log.Error().Err(err).Str("grant_id", string(rt.GrantID)).Msg("failed to revoke token family after replay")
+			}
+		} else {
+			// Legacy fallback: tokens issued before grant linkage carry no GrantID; revoke by user.
+			log.Warn().Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for user")
+			if err := uc.refreshTokenRepo.RevokeAllForUser(ctx, rt.UserID); err != nil {
+				log.Error().Err(err).Str("user_id", string(rt.UserID)).Msg("failed to revoke token family after replay")
+			}
 		}
 		return nil, autherrors.NewErrInvalidRefreshToken()
 	}

@@ -243,6 +243,15 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(_ context.Context, userID entity
 	return nil
 }
 
+func (m *mockRefreshTokenRepo) RevokeAllForGrant(_ context.Context, grantID entity.GrantID) error {
+	for _, rt := range m.tokens {
+		if rt.GrantID == grantID {
+			rt.RevokedAt = new(time.Now())
+		}
+	}
+	return nil
+}
+
 // ── mock ClientRegistry ───────────────────────────────────────────────────────
 
 const testClientSecret = "test-secret-1"

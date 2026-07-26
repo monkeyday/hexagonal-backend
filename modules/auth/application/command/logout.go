@@ -61,6 +61,20 @@ func (uc *LogoutUseCase) revokeIfAuthenticated(ctx context.Context, accessToken 
 		return
 	}
 	uc.blacklistAccessToken(ctx, claims)
+	uc.revokeGrantTokens(ctx, claims)
+}
+
+// revokeGrantTokens revokes the refresh tokens associated with the caller's session.
+// When the access token carries a grant ID (sid claim), only that grant's tokens are
+// revoked — logout ends the current session only (grant-linkage.md §1, §5).
+// Legacy tokens without a grant ID fall back to revoking all tokens for the user.
+// Expand/contract: remove the legacy branch once all sessions carry sid — grant-linkage.md §5.
+func (uc *LogoutUseCase) revokeGrantTokens(ctx context.Context, claims *corejwt.Claims) {
+	if claims.GrantID != "" {
+		_ = uc.refreshTokenRepo.RevokeAllForGrant(ctx, entity.GrantID(claims.GrantID))
+		return
+	}
+	// Legacy fallback: tokens issued before grant linkage carry no sid; revoke by user.
 	if claims.Subject != "" {
 		_ = uc.refreshTokenRepo.RevokeAllForUser(ctx, entity.UserID(claims.Subject))
 	}

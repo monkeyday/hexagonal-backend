@@ -220,21 +220,50 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 		}
 	}
 
-	t.Run("replayed revoked token — entire family revoked", func(t *testing.T) {
+	t.Run("replayed revoked token — only that grant's tokens revoked, other grant untouched", func(t *testing.T) {
+		stolenGrant := entity.NewGrantID()
+		otherGrant := entity.NewGrantID()
+
 		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = stolenGrant
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		sameGrantSibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "same-grant-sibling", Scope: entity.MustParseScope("openid")})
+		sameGrantSibling.GrantID = stolenGrant
+		otherGrantToken := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "other-grant-token", Scope: entity.MustParseScope("openid")})
+		otherGrantToken.GrantID = otherGrant
+		otherUser := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(stolen, sameGrantSibling, otherGrantToken, otherUser)
+
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if rtRepo.tokens[entity.Hash("same-grant-sibling")].RevokedAt == nil {
+			t.Error("replay must revoke all tokens in the same grant")
+		}
+		if rtRepo.tokens[entity.Hash("other-grant-token")].RevokedAt != nil {
+			t.Error("replay must not touch the same user's other grant")
+		}
+		if rtRepo.tokens[entity.Hash("other-user-token")].RevokedAt != nil {
+			t.Error("replay must not touch other users' tokens")
+		}
+	})
+
+	t.Run("replayed legacy token (empty GrantID) — entire user family revoked", func(t *testing.T) {
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-legacy-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = "" // legacy: no grant ID
 		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
 		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
 		otherUser := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(stolen, sibling, otherUser)
 
-		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-legacy-token"))
 		assertErrCode(t, err, autherrors.InvalidRefreshToken)
 
 		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt == nil {
-			t.Error("replay must revoke the user's entire token family")
+			t.Error("legacy replay must revoke the user's entire token family")
 		}
 		if rtRepo.tokens[entity.Hash("other-user-token")].RevokedAt != nil {
-			t.Error("replay must not touch other users' tokens")
+			t.Error("legacy replay must not touch other users' tokens")
 		}
 	})
 

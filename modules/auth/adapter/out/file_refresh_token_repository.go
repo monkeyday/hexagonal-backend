@@ -108,3 +108,13 @@ func (r *FileRefreshTokenRepository) RevokeAllForUser(_ context.Context, userID 
 		return false, nil
 	})
 }
+
+func (r *FileRefreshTokenRepository) RevokeAllForGrant(_ context.Context, grantID entity.GrantID) error {
+	return r.repo.UpdateAll(func(rt *entity.RefreshToken) (bool, error) {
+		if rt.GrantID == grantID && rt.RevokedAt == nil {
+			rt.RevokedAt = new(time.Now())
+			return true, nil
+		}
+		return false, nil
+	})
+}

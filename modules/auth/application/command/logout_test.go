@@ -209,4 +209,72 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("bearer with sid — only that grant's tokens revoked, same-user other grant untouched", func(t *testing.T) {
+		grantA := entity.NewGrantID()
+		grantB := entity.NewGrantID()
+
+		rtGrantA := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-a", Scope: entity.MustParseScope("openid")})
+		rtGrantA.GrantID = grantA
+		rtGrantB := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-b", Scope: entity.MustParseScope("openid")})
+		rtGrantB.GrantID = grantB
+		rtRepo := newMockRefreshTokenRepo(rtGrantA, rtGrantB)
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-a",
+					GrantID:   string(grantA),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+		}
+		uc := NewLogoutUseCase(deps)
+
+		if _, err := uc.Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rtRepo.tokens[rtGrantA.TokenHash].RevokedAt == nil {
+			t.Error("grantA token should be revoked after logout with sid=grantA")
+		}
+		if rtRepo.tokens[rtGrantB.TokenHash].RevokedAt != nil {
+			t.Error("grantB token should be untouched — different session")
+		}
+	})
+
+	t.Run("legacy bearer (no sid) — all user tokens revoked", func(t *testing.T) {
+		rtA := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-a", Scope: entity.MustParseScope("openid")})
+		rtB := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-b", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(rtA, rtB)
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-legacy",
+					GrantID:   "", // no sid — legacy token
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+		}
+		uc := NewLogoutUseCase(deps)
+
+		if _, err := uc.Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, rt := range rtRepo.tokens {
+			if rt.UserID == "user-1" && rt.RevokedAt == nil {
+				t.Error("legacy bearer must revoke all user tokens")
+			}
+		}
+	})
 }
