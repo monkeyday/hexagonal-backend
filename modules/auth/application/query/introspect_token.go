@@ -2,12 +2,12 @@ package query
 
 import (
 	"context"
-	"fmt"
 
 	corecache "sc/core/cache"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/application/service"
+	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
 	"sc/modules/auth/port"
 )
@@ -53,13 +53,13 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 
 	// Fail-closed on blacklist errors, matching Authenticate middleware behaviour.
 	if claims.ID != "" && uc.cache != nil {
-		revoked, err := uc.cache.GetErr(ctx, fmt.Sprintf(define.BlacklistCacheKey, claims.ID), nil)
+		revoked, err := uc.cache.GetErr(ctx, define.BlacklistKey(claims.ID), nil)
 		if err != nil || revoked {
 			return &define.IntrospectResponse{Active: false}, nil
 		}
 	}
 	if claims.GrantID != "" && uc.cache != nil {
-		grantRevoked, err := uc.cache.GetErr(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, claims.GrantID), nil)
+		grantRevoked, err := uc.cache.GetErr(ctx, define.RevokedGrantKey(entity.GrantID(claims.GrantID)), nil)
 		if err != nil || grantRevoked {
 			return &define.IntrospectResponse{Active: false}, nil
 		}

@@ -284,7 +284,7 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 		}))
 		_, err := mod.Dispatch(ctx, cmdFor("stolen-grant-token"))
 		assertErrCode(t, err, autherrors.InvalidRefreshToken)
-		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		markerKey := define.RevokedGrantKey(grantID)
 		if _, ok := cache.items[markerKey]; !ok {
 			t.Errorf("expected grant revocation marker %q in cache after replay, not found", markerKey)
 		}

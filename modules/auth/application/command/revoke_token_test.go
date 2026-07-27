@@ -88,7 +88,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-abc123")
+		key := define.BlacklistKey("jti-abc123")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache, but not found", key)
 		}
@@ -124,7 +124,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-rt-hint")
+		key := define.BlacklistKey("jti-rt-hint")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache after RT-hint miss, not found", key)
 		}
@@ -219,7 +219,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected nil — access-token blacklist should succeed despite RT storage error, got: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-fallthrough")
+		key := define.BlacklistKey("jti-fallthrough")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache after fallthrough, not found", key)
 		}
@@ -272,7 +272,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := cache.items[fmt.Sprintf(define.BlacklistCacheKey, "")]; ok {
+		if _, ok := cache.items[define.BlacklistKey("")]; ok {
 			t.Error("empty JTI must not be written to blacklist cache")
 		}
 	})
@@ -291,7 +291,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		}
 		assertRTRevoked(t, rtRepo, "rt-grant-1")
 		assertRTRevoked(t, rtRepo, "rt-grant-2") // grant-wide cascade
-		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		markerKey := define.RevokedGrantKey(grantID)
 		if _, ok := cache.items[markerKey]; !ok {
 			t.Errorf("expected grant revocation marker %q in cache, not found", markerKey)
 		}

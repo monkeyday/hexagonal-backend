@@ -3,9 +3,7 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 
-	corecache "sc/core/cache"
 	coreerror "sc/core/error"
 	coreuow "sc/core/uow"
 	"sc/core/usecase"
@@ -30,7 +28,7 @@ type RefreshTokenCommand struct {
 
 type RefreshTokenUseCase struct {
 	uow                  coreuow.UnitOfWork
-	cache                corecache.Cache
+	revocationCache      *domainService.RevocationCache
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
 	tokenIssuanceService *domainService.TokenIssuanceService
@@ -40,7 +38,7 @@ type RefreshTokenUseCase struct {
 func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
 	return &RefreshTokenUseCase{
 		uow:                  deps.UoW,
-		cache:                deps.Cache,
+		revocationCache:      domainService.NewRevocationCache(deps.Cache),
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
 		tokenIssuanceService: domainService.NewTokenIssuanceService(deps.JWTSvc),
@@ -53,10 +51,10 @@ func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
 // Errors are logged but not propagated — revocation of the refresh-token family
 // already happened; the marker is best-effort in the replay path.
 func (uc *RefreshTokenUseCase) writeRevokedGrantMarker(ctx context.Context, grantID entity.GrantID) {
-	if uc.cache == nil {
+	if uc.revocationCache == nil {
 		return
 	}
-	if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, grantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+	if err := uc.revocationCache.MarkGrantRevoked(ctx, grantID); err != nil {
 		log.Error().Err(err).Str("grant_id", string(grantID)).Msg("revoked_grant: cache set failed after replay")
 	}
 }

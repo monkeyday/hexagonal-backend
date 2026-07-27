@@ -3,7 +3,6 @@ package query
 import (
 	"context"
 	"errors"
-	"fmt"
 	coreerror "sc/core/error"
 	corejwt "sc/core/jwt"
 	"sc/core/usecase"
@@ -111,7 +110,7 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 				ExpiresAt: new(now.Add(time.Hour)),
 				IssuedAt:  new(now),
 			}},
-			cache:      newMockCache().seed(fmt.Sprintf(define.RevokedGrantCacheKey, "grant-abc"), true),
+			cache:      newMockCache().seed(define.RevokedGrantKey("grant-abc"), true),
 			wantActive: false,
 		},
 		{

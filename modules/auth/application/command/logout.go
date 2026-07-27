@@ -2,15 +2,13 @@ package command
 
 import (
 	"context"
-	"fmt"
-	corecache "sc/core/cache"
 	corejwt "sc/core/jwt"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
+	"sc/modules/auth/application/service"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
 	"slices"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -22,7 +20,7 @@ type LogoutCommand struct {
 
 type LogoutUseCase struct {
 	jwtSvc                      port.TokenParser
-	cache                       corecache.Cache
+	revocationCache             *service.RevocationCache
 	refreshTokenRepo            port.RefreshTokenRepository
 	postLogoutRedirectAllowlist []string
 }
@@ -30,7 +28,7 @@ type LogoutUseCase struct {
 func NewLogoutUseCase(deps define.Dependencies) usecase.UseCase {
 	return &LogoutUseCase{
 		jwtSvc:                      deps.JWTSvc,
-		cache:                       deps.Cache,
+		revocationCache:             service.NewRevocationCache(deps.Cache),
 		refreshTokenRepo:            deps.RefreshTokenRepo,
 		postLogoutRedirectAllowlist: deps.PostLogoutRedirectAllowlist,
 	}
@@ -71,8 +69,9 @@ func (uc *LogoutUseCase) revokeIfAuthenticated(ctx context.Context, accessToken 
 // Expand/contract: remove the legacy branch once all sessions carry sid — grant-linkage.md §5.
 func (uc *LogoutUseCase) revokeGrantTokens(ctx context.Context, claims *corejwt.Claims) {
 	if claims.GrantID != "" {
-		_ = uc.refreshTokenRepo.RevokeAllForGrant(ctx, entity.GrantID(claims.GrantID))
-		if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, claims.GrantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+		grantID := entity.GrantID(claims.GrantID)
+		_ = uc.refreshTokenRepo.RevokeAllForGrant(ctx, grantID)
+		if err := uc.revocationCache.MarkGrantRevoked(ctx, grantID); err != nil {
 			log.Warn().Err(err).Str("grant_id", claims.GrantID).Msg("revoked_grant: cache set failed")
 		}
 		return
@@ -87,7 +86,7 @@ func (uc *LogoutUseCase) blacklistAccessToken(ctx context.Context, claims *corej
 	if claims.ID == "" || claims.IsExpired() {
 		return
 	}
-	if err := uc.cache.Set(ctx, fmt.Sprintf(define.BlacklistCacheKey, claims.ID), true, new(time.Until(*claims.ExpiresAt))); err != nil {
+	if err := uc.revocationCache.BlacklistJTI(ctx, claims.ID, *claims.ExpiresAt); err != nil {
 		log.Warn().Err(err).Str("jti", claims.ID).Msg("blacklist: cache set failed")
 	}
 }

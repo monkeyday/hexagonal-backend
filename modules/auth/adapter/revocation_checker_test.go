@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"sc/modules/auth/application/define"
@@ -47,8 +46,8 @@ func TestRevocationChecker_IsRevoked(t *testing.T) {
 		grantID = "grant-abc"
 	)
 
-	blacklistKey := fmt.Sprintf(define.BlacklistCacheKey, jti)
-	grantKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+	blacklistKey := define.BlacklistKey(jti)
+	grantKey := define.RevokedGrantKey(grantID)
 
 	errCache := errors.New("cache unavailable")
 

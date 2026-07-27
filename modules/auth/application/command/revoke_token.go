@@ -3,12 +3,9 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
-	corecache "sc/core/cache"
 	coreerror "sc/core/error"
 	coremetrics "sc/core/metrics"
 	"sc/core/usecase"
@@ -31,7 +28,7 @@ type RevokeTokenCommand struct {
 
 type RevokeTokenUseCase struct {
 	jwtSvc              port.TokenParser
-	cache               corecache.Cache
+	revocationCache     *service.RevocationCache
 	refreshTokenRepo    port.RefreshTokenRepository
 	revocationsCounter  coremetrics.Counter
 	clientAuthenticator *service.ClientAuthenticator
@@ -44,7 +41,7 @@ func NewRevokeTokenUseCase(deps define.Dependencies) usecase.UseCase {
 	}
 	return &RevokeTokenUseCase{
 		jwtSvc:              deps.JWTSvc,
-		cache:               deps.Cache,
+		revocationCache:     service.NewRevocationCache(deps.Cache),
 		refreshTokenRepo:    deps.RefreshTokenRepo,
 		revocationsCounter:  rec.Counter(define.MetricTokenRevocations),
 		clientAuthenticator: service.NewClientAuthenticator(deps.ClientRegistry),
@@ -143,7 +140,7 @@ func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, r
 		if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
 			return err
 		}
-		if err := uc.cache.Set(ctx, fmt.Sprintf(define.RevokedGrantCacheKey, rt.GrantID), true, new(define.RevokedGrantMarkerTTL)); err != nil {
+		if err := uc.revocationCache.MarkGrantRevoked(ctx, rt.GrantID); err != nil {
 			return err
 		}
 	}
@@ -168,7 +165,7 @@ func (uc *RevokeTokenUseCase) blacklistAccessToken(ctx context.Context, token, c
 	if claims.IsExpired() {
 		return false, nil
 	}
-	if err := uc.cache.Set(ctx, fmt.Sprintf(define.BlacklistCacheKey, claims.ID), true, new(time.Until(*claims.ExpiresAt))); err != nil {
+	if err := uc.revocationCache.BlacklistJTI(ctx, claims.ID, *claims.ExpiresAt); err != nil {
 		return false, err
 	}
 	uc.revocationsCounter.Add(1)

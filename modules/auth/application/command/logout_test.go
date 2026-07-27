@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 	corejwt "sc/core/jwt"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
@@ -48,7 +47,7 @@ func TestLogoutUseCase(t *testing.T) {
 			wantRedirect:                allowedURI,
 			wantTokensGone:              true,
 			wantCookieCleared:           true,
-			wantJTIBlacklisted:          fmt.Sprintf(define.BlacklistCacheKey, "jti-xyz"),
+			wantJTIBlacklisted:          define.BlacklistKey("jti-xyz"),
 		},
 		{
 			name:               "valid bearer token, no redirect URI — revokes, empty redirect",
@@ -56,7 +55,7 @@ func TestLogoutUseCase(t *testing.T) {
 			jwt:                &mockJwtService{parseClaims: validAccessClaims},
 			wantRedirect:       "",
 			wantTokensGone:     true,
-			wantJTIBlacklisted: fmt.Sprintf(define.BlacklistCacheKey, "jti-xyz"),
+			wantJTIBlacklisted: define.BlacklistKey("jti-xyz"),
 		},
 		{
 			name: "no credentials (cross-site GET shape) — nothing revoked, still redirects",
@@ -231,7 +230,7 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		markerKey := fmt.Sprintf(define.RevokedGrantCacheKey, grantID)
+		markerKey := define.RevokedGrantKey(grantID)
 		if _, ok := cache.items[markerKey]; !ok {
 			t.Errorf("expected grant revocation marker %q in cache after logout with sid, not found", markerKey)
 		}
