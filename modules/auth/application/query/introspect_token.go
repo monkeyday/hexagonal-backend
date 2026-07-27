@@ -64,6 +64,13 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 			return &define.IntrospectResponse{Active: false}, nil
 		}
 	}
+	if claims.IssuedAt != nil && uc.cache != nil {
+		var invalidatedAt int64
+		found, err := uc.cache.GetErr(ctx, define.SessionsInvalidatedKey(entity.UserID(claims.Subject)), &invalidatedAt)
+		if err != nil || (found && claims.IssuedAt.Unix() <= invalidatedAt) {
+			return &define.IntrospectResponse{Active: false}, nil
+		}
+	}
 
 	resp := &define.IntrospectResponse{
 		Active:    true,

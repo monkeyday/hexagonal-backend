@@ -9,11 +9,11 @@ import (
 	"sc/modules/auth/domain/entity"
 )
 
-// RevocationCache writes the two revocation markers the token layer reads:
-// a per-token blacklist entry and a per-grant marker. It owns the pairing of
-// each marker with its TTL, so no call site can store one with the wrong
-// lifetime. Callers keep their own error policy — every method returns the
-// cache error and logs nothing.
+// RevocationCache writes the three revocation markers the token layer reads:
+// a per-token blacklist entry, a per-grant marker, and a per-user sessions marker.
+// It owns the pairing of each marker with its TTL, so no call site can store one
+// with the wrong lifetime. Callers keep their own error policy — every method
+// returns the cache error and logs nothing.
 type RevocationCache struct {
 	cache corecache.Cache
 }
@@ -40,4 +40,14 @@ func (s *RevocationCache) BlacklistJTI(ctx context.Context, jti string, expiresA
 // early (define.RevokedGrantMarkerTTL).
 func (s *RevocationCache) MarkGrantRevoked(ctx context.Context, grantID entity.GrantID) error {
 	return s.cache.Set(ctx, define.RevokedGrantKey(grantID), true, new(define.RevokedGrantMarkerTTL))
+}
+
+// MarkSessionsInvalidated marks every access token issued to a user at or before `at` as
+// revoked — the user-level granularity password reset needs, which no per-grant marker can
+// cover because nothing enumerates a user's grants (grant-linkage.md §9). `at` is passed in
+// rather than read from the clock here: it must be the same instant the transaction wrote to
+// entity.User.SessionsInvalidatedAt. Stored as Unix seconds to match the `iat` claim's
+// granularity, so the comparison needs no parsing.
+func (s *RevocationCache) MarkSessionsInvalidated(ctx context.Context, userID entity.UserID, at time.Time) error {
+	return s.cache.Set(ctx, define.SessionsInvalidatedKey(userID), at.Unix(), new(define.SessionsInvalidationTTL))
 }

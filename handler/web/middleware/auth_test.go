@@ -25,27 +25,35 @@ func (m *mockJwtService) ParseJWT(_ string) (*corejwt.Claims, error) {
 
 // mockRevocationChecker implements RevocationChecker for auth middleware tests.
 type mockRevocationChecker struct {
-	revoked       map[string]bool // revoked JTIs
-	revokedGrants map[string]bool // revoked grant IDs
-	err           error           // if set, IsRevoked returns this error for any call
+	revoked          map[string]bool // revoked JTIs
+	revokedGrants    map[string]bool // revoked grant IDs
+	invalidatedUsers map[string]bool // users whose sessions are invalidated (all tokens)
+	err              error           // if set, IsRevoked returns this error for any call
 }
 
 func newMockRevocationChecker(revokedJTIs ...string) *mockRevocationChecker {
-	m := &mockRevocationChecker{revoked: make(map[string]bool), revokedGrants: make(map[string]bool)}
+	m := &mockRevocationChecker{
+		revoked:          make(map[string]bool),
+		revokedGrants:    make(map[string]bool),
+		invalidatedUsers: make(map[string]bool),
+	}
 	for _, jti := range revokedJTIs {
 		m.revoked[jti] = true
 	}
 	return m
 }
 
-func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string, grantID string) (bool, error) {
+func (m *mockRevocationChecker) IsRevoked(_ context.Context, claims *corejwt.Claims) (bool, error) {
 	if m.err != nil {
 		return false, m.err
 	}
-	if m.revoked[jti] {
+	if m.revoked[claims.ID] {
 		return true, nil
 	}
-	if grantID != "" && m.revokedGrants[grantID] {
+	if claims.GrantID != "" && m.revokedGrants[claims.GrantID] {
+		return true, nil
+	}
+	if m.invalidatedUsers[claims.Subject] {
 		return true, nil
 	}
 	return false, nil
@@ -288,9 +296,25 @@ func TestAuthenticate(t *testing.T) {
 				Subject: "user-42", ID: "jti-grant-err", GrantID: "some-grant",
 			}},
 			rev: &mockRevocationChecker{
-				revoked:       map[string]bool{},
-				revokedGrants: map[string]bool{},
-				err:           errors.New("cache unavailable"),
+				revoked:          map[string]bool{},
+				revokedGrants:    map[string]bool{},
+				invalidatedUsers: map[string]bool{},
+				err:              errors.New("cache unavailable"),
+			},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:       "sessions invalidated for user — 401 even though JTI and grant are clean",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "clean-jti-3", GrantID: "clean-grant",
+				IssuedAt: new(time.Now()),
+			}},
+			rev: &mockRevocationChecker{
+				revoked:          map[string]bool{},
+				revokedGrants:    map[string]bool{},
+				invalidatedUsers: map[string]bool{"user-42": true},
 			},
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
