@@ -9,6 +9,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -27,6 +28,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 			JWTSvc:           jwtSvc,
 			Cache:            cache,
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry: newMockClientRegistry(
 				newTestClient(t, "public-client", entity.ClientAuthNone),
 				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
@@ -361,6 +363,7 @@ func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
 			JWTSvc:           &mockJwtService{parseErr: fmt.Errorf("not a jwt")},
 			Cache:            newMockCache(),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry: newMockClientRegistry(
 				newTestClient(t, "public-client", entity.ClientAuthNone),
 				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
@@ -413,6 +416,80 @@ func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
 		}
 		if rt, _ := rtRepo.FindByTokenHash(ctx, entity.Hash("rt-1")); rt == nil || rt.RevokedAt != nil {
 			t.Error("token must stay active when client auth fails")
+		}
+	})
+}
+
+// TestRevokeTokenUseCase_GrantRevocation covers RFC 7009 §2.1's grant sweep gaining
+// the durable grant record (grant-linkage.md §10, PR8).
+func TestRevokeTokenUseCase_GrantRevocation(t *testing.T) {
+	ctx := context.Background()
+
+	seed := func(t *testing.T, grantRepo *mockGrantRepo, rtRepo *mockRefreshTokenRepo) (*usecase.Registry, entity.GrantID) {
+		t.Helper()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant", Scope: entity.MustParseScope("openid")})
+		rtRepo.tokens[rt.TokenHash] = rt
+		grant := entity.NewGrant("user-1", "")
+		grant.ID = rt.GrantID
+		if err := grantRepo.Save(ctx, grant); err != nil {
+			t.Fatalf("seeding grant: %v", err)
+		}
+		mod := usecase.NewRegistry()
+		mod.Register(RevokeTokenCommand{}, NewRevokeTokenUseCase(define.Dependencies{
+			UserRepo:         newMockRepo(newTestUser()),
+			JWTSvc:           &mockJwtService{},
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "public-client", entity.ClientAuthNone)),
+		}))
+		return mod, rt.GrantID
+	}
+
+	t.Run("grant revoked before its rows are swept", func(t *testing.T) {
+		ops := &opsLog{}
+		rtRepo := newMockRefreshTokenRepo()
+		rtRepo.ops = ops
+		grantRepo := newMockGrantRepo()
+		grantRepo.ops = ops
+		mod, grantID := seed(t, grantRepo, rtRepo)
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got := ops.all(); !slices.Equal(got, []string{"revoke_grant", "sweep_rows"}) {
+			t.Errorf("call order = %v, want [revoke_grant sweep_rows] — the durable record must be written before the non-atomic sweep", got)
+		}
+		if stored := grantRepo.grants[grantID]; stored == nil || stored.RevokedAt == nil {
+			t.Error("revocation must mark the grant itself, not only its rows")
+		}
+	})
+
+	t.Run("grant already revoked (concurrent winner) — sweep still runs, no error", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, grantID := seed(t, grantRepo, rtRepo)
+		grantRepo.grants[grantID].RevokedAt = new(time.Now()) // ErrNotFound on Revoke
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+			t.Fatalf("an already-revoked grant must not fail the revocation: %v", err)
+		}
+		for _, rt := range rtRepo.tokens {
+			if rt.RevokedAt == nil {
+				t.Error("row sweep must still run when the grant was already revoked")
+			}
+		}
+	})
+
+	t.Run("grant store error — surfaced to the caller", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, _ := seed(t, grantRepo, rtRepo)
+		grantRepo.revokeErr = fmt.Errorf("db down")
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err == nil {
+			t.Error("a grant-store failure must be surfaced, not swallowed — revoke propagates its errors")
 		}
 	})
 }

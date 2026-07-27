@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	coreerror "sc/core/error"
@@ -195,6 +196,114 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 	})
 }
 
+// TestRefreshTokenUseCase_GrantCheck covers the grant check inside the rotation
+// transaction (grant-linkage.md §10, PR8): a dead grant stops the chain, and a
+// live one has its expiry pushed out so it outlives the token just issued.
+func TestRefreshTokenUseCase_GrantCheck(t *testing.T) {
+	ctx := context.Background()
+	user := newTestUser()
+
+	// setup returns a use case whose refresh token belongs to grant, plus the
+	// repos so the test can inspect what the rotation did. A nil grant leaves
+	// the grant repo empty, which is the legacy (pre-linkage) chain.
+	setup := func(t *testing.T, grant *entity.Grant) (*usecase.Registry, *mockRefreshTokenRepo, *mockGrantRepo, *entity.RefreshToken) {
+		t.Helper()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
+		grantRepo := newMockGrantRepo()
+		if grant != nil {
+			grant.ID = rt.GrantID
+			if err := grantRepo.Save(ctx, grant); err != nil {
+				t.Fatalf("seeding grant: %v", err)
+			}
+		}
+		rtRepo := newMockRefreshTokenRepo(rt)
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &transactionalMockUoW{rtRepo: rtRepo},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(user),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		return mod, rtRepo, grantRepo, rt
+	}
+
+	dispatch := func(mod *usecase.Registry) (any, error) {
+		return mod.Dispatch(ctx, &RefreshTokenCommand{
+			GrantType:    "refresh_token",
+			ClientID:     "APP_ID",
+			RefreshToken: "valid-refresh-token",
+		})
+	}
+
+	t.Run("revoked grant — rotation rejected, old token left unrevoked", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.RevokedAt = new(time.Now())
+		mod, rtRepo, _, rt := setup(t, grant)
+
+		_, err := dispatch(mod)
+		if err == nil {
+			t.Fatal("expected rotation to be rejected on a revoked grant, got nil error")
+		}
+		e, ok := err.(interface{ Code() coreerror.ErrCode })
+		if !ok || e.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("error = %v, want InvalidRefreshToken", err)
+		}
+		if stored := rtRepo.tokens[rt.TokenHash]; stored == nil || stored.RevokedAt != nil {
+			t.Error("old refresh token must be left unrevoked when the grant check rejects the rotation")
+		}
+		if len(rtRepo.tokens) != 1 {
+			t.Errorf("expected no new token persisted, got %d tokens", len(rtRepo.tokens))
+		}
+	})
+
+	t.Run("expired grant — rotation rejected", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.ExpiresAt = time.Now().Add(-time.Minute)
+		mod, _, _, _ := setup(t, grant)
+
+		_, err := dispatch(mod)
+		if err == nil {
+			t.Fatal("expected rotation to be rejected on an expired grant, got nil error")
+		}
+		e, ok := err.(interface{ Code() coreerror.ErrCode })
+		if !ok || e.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("error = %v, want InvalidRefreshToken", err)
+		}
+	})
+
+	t.Run("missing grant (pre-linkage chain) — rotation succeeds, fails open", func(t *testing.T) {
+		mod, _, grantRepo, _ := setup(t, nil)
+
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("rotation must fail open when the grant is absent: %v", err)
+		}
+		if len(grantRepo.grants) != 0 {
+			t.Errorf("expected no grant to be created by the check, got %d", len(grantRepo.grants))
+		}
+	})
+
+	t.Run("active grant — ExpiresAt extended past the token just issued", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.ExpiresAt = time.Now().Add(time.Hour) // close to collection
+		mod, _, grantRepo, rt := setup(t, grant)
+
+		before := time.Now()
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		stored := grantRepo.grants[rt.GrantID]
+		if stored == nil {
+			t.Fatal("grant not found after rotation")
+		}
+		if !stored.ExpiresAt.After(before.Add(entity.RefreshTokenTTL - time.Minute)) {
+			t.Errorf("ExpiresAt = %v, want extended to roughly now+RefreshTokenTTL (%v)", stored.ExpiresAt, before.Add(entity.RefreshTokenTTL))
+		}
+	})
+}
+
 func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 	ctx := context.Background()
 
@@ -343,6 +452,41 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 
 		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt != nil {
 			t.Error("losing a rotation race is not a replay; family must stay intact")
+		}
+	})
+
+	t.Run("replay revokes the grant before sweeping its rows", func(t *testing.T) {
+		ops := &opsLog{}
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-ordered", Scope: entity.MustParseScope("openid")})
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		rtRepo := newMockRefreshTokenRepo(stolen)
+		rtRepo.ops = ops
+		grantRepo := newMockGrantRepo()
+		grantRepo.ops = ops
+		grant := entity.NewGrant("user-1", "")
+		grant.ID = stolen.GrantID
+		if err := grantRepo.Save(ctx, grant); err != nil {
+			t.Fatalf("seeding grant: %v", err)
+		}
+
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-ordered"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if got := ops.all(); !slices.Equal(got, []string{"revoke_grant", "sweep_rows"}) {
+			t.Errorf("call order = %v, want [revoke_grant sweep_rows] — the durable record must be written before the non-atomic sweep", got)
+		}
+		if stored := grantRepo.grants[stolen.GrantID]; stored == nil || stored.RevokedAt == nil {
+			t.Error("replay must revoke the grant itself, not only its rows")
 		}
 	})
 }

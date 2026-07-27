@@ -80,3 +80,30 @@ func TestGrantIsValid(t *testing.T) {
 		}
 	})
 }
+
+func TestGrantExtendExpiry(t *testing.T) {
+	t.Run("pushes expiry to a full TTL from now", func(t *testing.T) {
+		g := NewGrant(UserID("u"), ClientID("c"))
+		g.ExpiresAt = time.Now().Add(time.Hour) // nearly collected
+
+		before := time.Now()
+		g.ExtendExpiry()
+		after := time.Now()
+
+		if g.ExpiresAt.Before(before.Add(RefreshTokenTTL)) || g.ExpiresAt.After(after.Add(RefreshTokenTTL)) {
+			t.Errorf("ExpiresAt = %v, want between %v and %v", g.ExpiresAt, before.Add(RefreshTokenTTL), after.Add(RefreshTokenTTL))
+		}
+	})
+
+	t.Run("leaves revocation alone — a revoked grant stays invalid", func(t *testing.T) {
+		g := NewGrant(UserID("u"), ClientID("c"))
+		now := time.Now()
+		g.RevokedAt = &now
+
+		g.ExtendExpiry()
+
+		if g.IsValid() {
+			t.Error("extending expiry must not resurrect a revoked grant")
+		}
+	})
+}

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"time"
 
 	coreerror "sc/core/error"
 	coreuow "sc/core/uow"
@@ -61,6 +62,17 @@ func (uc *RefreshTokenUseCase) writeRevokedGrantMarker(ctx context.Context, gran
 	}
 }
 
+// revokeGrant marks the grant itself dead ahead of the row sweep, so the fact
+// survives a rotation that commits mid-sweep and outlives the cache marker's
+// TTL (grant-linkage.md §10). ErrNotFound means the grant predates this record
+// or a concurrent revocation won — neither is an error here. Best-effort like
+// the sweep it precedes: the caller is already returning a replay rejection.
+func (uc *RefreshTokenUseCase) revokeGrant(ctx context.Context, grantID entity.GrantID) {
+	if err := uc.grantRepo.Revoke(ctx, grantID, time.Now()); err != nil && !errors.Is(err, coreerror.ErrNotFound) {
+		log.Error().Err(err).Str("grant_id", string(grantID)).Msg("failed to revoke grant after replay")
+	}
+}
+
 func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error) {
 	c := cmd.(*RefreshTokenCommand)
 
@@ -116,7 +128,7 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 		}
 	}
 
-	if err := uc.updateRefreshToken(ctx, rt, user.ID, tokens); err != nil {
+	if err := uc.updateRefreshToken(ctx, rt, user.ID, rt.GrantID, tokens); err != nil {
 		return nil, err
 	}
 
@@ -139,6 +151,7 @@ func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw s
 	if rt.RevokedAt != nil {
 		if rt.GrantID != "" {
 			log.Warn().Str("grant_id", string(rt.GrantID)).Str("user_id", string(rt.UserID)).Msg("refresh token replay detected; revoking all tokens for grant")
+			uc.revokeGrant(ctx, rt.GrantID)
 			if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
 				log.Error().Err(err).Str("grant_id", string(rt.GrantID)).Msg("failed to revoke token family after replay")
 			}
@@ -158,8 +171,46 @@ func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw s
 	return rt, nil
 }
 
-func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *entity.RefreshToken, userID entity.UserID, newTokens *entity.IssuedTokens) error {
+// checkAndExtendGrant rejects a rotation whose grant is revoked or expired, and
+// otherwise pushes the grant's expiry out so it outlives the refresh token being
+// issued. Must be called inside the rotation transaction.
+//
+// An empty grantID, or a grant that no longer exists, fails open: chains
+// authenticated before grants were persisted have nothing to check, and the
+// rotation falls through to the checks that already exist. PR9 flips this to
+// fail-closed once the TTL window has elapsed (grant-linkage.md §10).
+func (uc *RefreshTokenUseCase) checkAndExtendGrant(ctx context.Context, grantID entity.GrantID) error {
+	if grantID == "" {
+		return nil
+	}
+	grant, err := uc.grantRepo.FindByID(ctx, grantID)
+	if err != nil {
+		if errors.Is(err, coreerror.ErrNotFound) {
+			return nil
+		}
+		return autherrors.NewErrGenRefreshTokenFailed(err)
+	}
+	if !grant.IsValid() {
+		return autherrors.NewErrInvalidRefreshToken()
+	}
+	grant.ExtendExpiry()
+	if err := uc.grantRepo.Save(ctx, grant); err != nil {
+		return autherrors.NewErrGenRefreshTokenFailed(err)
+	}
+	return nil
+}
+
+// updateRefreshToken rotates the chain inside one transaction. The grant check
+// goes first and inside it on purpose: extending ExpiresAt writes the grant
+// document, so a concurrent Revoke of the same grant raises a write conflict,
+// the transaction retries, and the retry sees the revocation and rejects — the
+// grant document is the serialization point a multi-row sweep cannot be
+// (grant-linkage.md §10).
+func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *entity.RefreshToken, userID entity.UserID, grantID entity.GrantID, newTokens *entity.IssuedTokens) error {
 	_, err := uc.uow.Do(ctx, func(ctx context.Context) (any, error) {
+		if err := uc.checkAndExtendGrant(ctx, grantID); err != nil {
+			return nil, err
+		}
 		if err := uc.refreshTokenRepo.RevokeByTokenHash(ctx, oldRT.TokenHash); err != nil {
 			if errors.Is(err, coreerror.ErrNotFound) {
 				return nil, autherrors.NewErrInvalidRefreshToken()

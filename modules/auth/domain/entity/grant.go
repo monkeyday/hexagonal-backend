@@ -18,10 +18,9 @@ type Grant struct {
 }
 
 // NewGrant mints a grant for a new authentication event. Like NewRefreshToken
-// it generates its own ID and timestamps. ExpiresAt is a fixed RefreshTokenTTL
-// window from the authentication event and is never extended here: a rotated
-// RefreshToken gets a fresh TTL, so a long-lived chain will outlive its grant
-// until rotation starts extending ExpiresAt (grant-linkage.md §10, PR8).
+// it generates its own ID and timestamps. ExpiresAt starts as a RefreshTokenTTL
+// window from the authentication event and is extended by ExtendExpiry on every
+// rotation, so the grant always outlives its refresh chain.
 // DeviceID is filled in once client support is established (exchange_code.go:27).
 //
 // The returned grant's ID feeds both the access-token sid claim and the
@@ -41,4 +40,12 @@ func NewGrant(userID UserID, clientID ClientID) *Grant {
 
 func (g *Grant) IsValid() bool {
 	return g.RevokedAt == nil && time.Now().Before(g.ExpiresAt)
+}
+
+// ExtendExpiry pushes the grant's expiry out by a full RefreshTokenTTL from now.
+// A grant has no natural expiry — rotation renews its chain indefinitely — so
+// rotation calls this inside its transaction to keep the grant record alive for
+// at least as long as the refresh token it just issued (grant-linkage.md §10).
+func (g *Grant) ExtendExpiry() {
+	g.ExpiresAt = time.Now().Add(RefreshTokenTTL)
 }

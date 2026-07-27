@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -30,6 +31,7 @@ type RevokeTokenUseCase struct {
 	jwtSvc              port.TokenParser
 	revocationCache     *service.RevocationCache
 	refreshTokenRepo    port.RefreshTokenRepository
+	grantRepo           port.GrantRepository
 	revocationsCounter  coremetrics.Counter
 	clientAuthenticator *service.ClientAuthenticator
 }
@@ -43,6 +45,7 @@ func NewRevokeTokenUseCase(deps define.Dependencies) usecase.UseCase {
 		jwtSvc:              deps.JWTSvc,
 		revocationCache:     service.NewRevocationCache(deps.Cache),
 		refreshTokenRepo:    deps.RefreshTokenRepo,
+		grantRepo:           deps.GrantRepo,
 		revocationsCounter:  rec.Counter(define.MetricTokenRevocations),
 		clientAuthenticator: service.NewClientAuthenticator(deps.ClientRegistry),
 	}
@@ -124,8 +127,10 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 }
 
 // revokeConfirmedRefreshToken revokes a token already confirmed as caller-owned,
-// then cascades the revocation to all sibling tokens in the same grant and writes
-// a cache marker so stateless access tokens stop verifying (RFC 7009 §2.1).
+// then cascades the revocation to the grant itself, to all sibling tokens in that
+// grant, and to a cache marker so stateless access tokens stop verifying
+// (RFC 7009 §2.1). The grant goes first: it is the durable record a rotation
+// committing mid-sweep cannot escape (grant-linkage.md §10).
 // ErrNotFound from RevokeByTokenHash means the token was revoked in a concurrent
 // request between FindByTokenHash and now — treat as success without sweeping the
 // grant (the concurrent winner already did it).
@@ -137,6 +142,11 @@ func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, r
 		return err
 	}
 	if rt.GrantID != "" {
+		// ErrNotFound: the grant predates this record, or a concurrent revocation
+		// already marked it — neither blocks the sweep below.
+		if err := uc.grantRepo.Revoke(ctx, rt.GrantID, time.Now()); err != nil && !errors.Is(err, coreerror.ErrNotFound) {
+			return err
+		}
 		if err := uc.refreshTokenRepo.RevokeAllForGrant(ctx, rt.GrantID); err != nil {
 			return err
 		}
