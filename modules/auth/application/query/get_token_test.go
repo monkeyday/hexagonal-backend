@@ -157,6 +157,7 @@ func TestGetTokenUseCase(t *testing.T) {
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
+				GrantRepo:        newMockGrantRepo(),
 				ScopeAllowlist:   defaultAllowlist,
 			}))
 			result, err := mod.Dispatch(ctx, tc.cmd)
@@ -220,6 +221,7 @@ func TestGetToken_AccountLockout(t *testing.T) {
 		uc := NewGetTokenUseCase(define.Dependencies{
 			UserRepo:         repo,
 			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			GrantRepo:        newMockGrantRepo(),
 			JWTSvc:           &mockJwtService{accessToken: "at", refreshToken: "rt"},
 			ScopeAllowlist:   []string{"openid"},
 		})
@@ -284,6 +286,7 @@ func TestGetToken_RehashOnLogin(t *testing.T) {
 	uc := NewGetTokenUseCase(define.Dependencies{
 		UserRepo:         repo,
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		JWTSvc:           &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
 		ScopeAllowlist:   []string{"openid"},
 	})

@@ -30,7 +30,7 @@ func completeMongo() *mongorepo.Config {
 }
 
 func completeFileRepo() *FileRepositoryConfig {
-	return &FileRepositoryConfig{Dir: "/data", UserFileName: "users.json", RefreshTokenFileName: "refresh_tokens.json"}
+	return &FileRepositoryConfig{Dir: "/data", UserFileName: "users.json", RefreshTokenFileName: "refresh_tokens.json", GrantFileName: "grants.json"}
 }
 
 func TestNormalizePort(t *testing.T) {

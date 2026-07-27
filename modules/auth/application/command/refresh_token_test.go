@@ -31,6 +31,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -85,6 +86,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           jwtSvc,
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -129,6 +131,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           jwtSvc,
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -167,6 +170,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -201,6 +205,7 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(newTestUser()),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		return mod
@@ -280,6 +285,7 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 			UserRepo:         newMockRepo(newTestUser()),
 			Cache:            cache,
 			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		_, err := mod.Dispatch(ctx, cmdFor("stolen-grant-token"))
@@ -302,6 +308,7 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 			UserRepo:         newMockRepo(newTestUser()),
 			Cache:            cache,
 			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		_, err := mod.Dispatch(ctx, cmdFor("stolen-legacy-marker"))
@@ -643,6 +650,7 @@ func TestRefreshTokenUseCase(t *testing.T) {
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
+				GrantRepo:        newMockGrantRepo(),
 				ClientRegistry: newMockClientRegistry(
 					newTestClient(t, "APP_ID", entity.ClientAuthNone),
 					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
@@ -718,6 +726,7 @@ func TestRefreshTokenUseCase_UoWError(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(newTestUser()),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		return mod

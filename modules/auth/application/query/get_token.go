@@ -29,6 +29,7 @@ type GetTokenQuery struct {
 type GetTokenUseCase struct {
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
+	grantRepo            port.GrantRepository
 	tokenIssuanceService *service.TokenIssuanceService
 	scopeAllowlist       []string
 }
@@ -37,6 +38,7 @@ func NewGetTokenUseCase(deps define.Dependencies) usecase.UseCase {
 	return &GetTokenUseCase{
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
+		grantRepo:            deps.GrantRepo,
 		tokenIssuanceService: service.NewTokenIssuanceService(deps.JWTSvc),
 		scopeAllowlist:       deps.ScopeAllowlist,
 	}
@@ -92,6 +94,12 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if tokens.NewGrant != nil {
+		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
+			return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
+		}
 	}
 
 	rt := entity.NewRefreshToken(user.ID, "", tokens)

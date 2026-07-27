@@ -59,24 +59,27 @@ func TestExchangeCodeUseCase(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		cmd              *ExchangeCodeCommand
-		jwtSvc           *mockJwtService
-		userRepoOverride *mockUserRepo
-		rtRepoOverride   *mockRefreshTokenRepo
-		extraCodes       []*entity.AuthCode
-		wantErrCode      coreerror.ErrCode
-		wantAnyErr       bool
-		wantRTPersisted  bool
-		wantIDTokenNonce string
-		check            func(t *testing.T, resp *define.TokenResponse)
+		name               string
+		cmd                *ExchangeCodeCommand
+		jwtSvc             *mockJwtService
+		userRepoOverride   *mockUserRepo
+		rtRepoOverride     *mockRefreshTokenRepo
+		grantRepoOverride  *mockGrantRepo
+		extraCodes         []*entity.AuthCode
+		wantErrCode        coreerror.ErrCode
+		wantAnyErr         bool
+		wantRTPersisted    bool
+		wantGrantPersisted bool
+		wantIDTokenNonce   string
+		check              func(t *testing.T, resp *define.TokenResponse)
 	}{
 		{
-			name:             "valid code returns tokens",
-			cmd:              base,
-			jwtSvc:           &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
-			wantRTPersisted:  true,
-			wantIDTokenNonce: "nonce-abc",
+			name:               "valid code returns tokens",
+			cmd:                base,
+			jwtSvc:             &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
+			wantRTPersisted:    true,
+			wantGrantPersisted: true,
+			wantIDTokenNonce:   "nonce-abc",
 			check: func(t *testing.T, resp *define.TokenResponse) {
 				if resp.AccessToken == "" {
 					t.Error("access_token must not be empty")
@@ -358,6 +361,10 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			if rtRepo == nil {
 				rtRepo = newMockRefreshTokenRepo()
 			}
+			grantRepo := tc.grantRepoOverride
+			if grantRepo == nil {
+				grantRepo = newMockGrantRepo()
+			}
 			mc := newMockCache().seed(fmt.Sprintf(define.AuthCodeCacheKey, "valid-code"), newValidCode())
 			for _, c := range tc.extraCodes {
 				mc.seed(fmt.Sprintf(define.AuthCodeCacheKey, c.Code), c)
@@ -367,6 +374,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				UserRepo:         userRepo,
 				Cache:            mc,
 				RefreshTokenRepo: rtRepo,
+				GrantRepo:        grantRepo,
 				ClientRegistry: newMockClientRegistry(
 					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
 					newTestClient(t, "basic-client", entity.ClientAuthSecretBasic),
@@ -408,6 +416,11 @@ func TestExchangeCodeUseCase(t *testing.T) {
 					t.Errorf("RT.UserID = %q, want %q", rt.UserID, user.ID)
 				}
 			}
+			if tc.wantGrantPersisted {
+				if len(grantRepo.grants) == 0 {
+					t.Error("grant should be persisted in the repository")
+				}
+			}
 			if tc.wantIDTokenNonce != "" {
 				if got := tc.jwtSvc.capturedIDTokenNonce; got != tc.wantIDTokenNonce {
 					t.Errorf("GenIDToken nonce = %q, want %q", got, tc.wantIDTokenNonce)
@@ -435,6 +448,7 @@ func TestExchangeCodeOnlyOnce(t *testing.T) {
 		UserRepo:         newMockRepo(user),
 		Cache:            mc,
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	})
 
@@ -462,6 +476,7 @@ func TestExchangeCodeValidation(t *testing.T) {
 		UserRepo:         newMockRepo(newTestUser()),
 		Cache:            newMockCache(),
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	}))
 

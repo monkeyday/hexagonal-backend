@@ -31,6 +31,7 @@ type RefreshTokenUseCase struct {
 	revocationCache      *domainService.RevocationCache
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
+	grantRepo            port.GrantRepository
 	tokenIssuanceService *domainService.TokenIssuanceService
 	clientAuthenticator  *domainService.ClientAuthenticator
 }
@@ -41,6 +42,7 @@ func NewRefreshTokenUseCase(deps define.Dependencies) usecase.UseCase {
 		revocationCache:      domainService.NewRevocationCache(deps.Cache),
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
+		grantRepo:            deps.GrantRepo,
 		tokenIssuanceService: domainService.NewTokenIssuanceService(deps.JWTSvc),
 		clientAuthenticator:  domainService.NewClientAuthenticator(deps.ClientRegistry),
 	}
@@ -106,6 +108,12 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if tokens.NewGrant != nil {
+		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
+			return nil, autherrors.NewErrGenRefreshTokenFailed(err)
+		}
 	}
 
 	if err := uc.updateRefreshToken(ctx, rt, user.ID, tokens); err != nil {

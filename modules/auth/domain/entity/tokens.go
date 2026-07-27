@@ -16,6 +16,9 @@ type IssuedTokens struct {
 	IDToken      string
 	Scope        Scope
 	GrantID      GrantID
+	// NewGrant is non-nil only for a new authentication event; on rotation the
+	// grant already exists and is carried forward. The use case persists it.
+	NewGrant *Grant
 }
 type RefreshToken struct {
 	ID              string

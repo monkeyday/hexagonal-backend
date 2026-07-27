@@ -252,6 +252,50 @@ func (m *mockRefreshTokenRepo) RevokeAllForGrant(_ context.Context, grantID enti
 	return nil
 }
 
+// ── mock GrantRepository ─────────────────────────────────────────────────────
+
+type mockGrantRepo struct {
+	mu      sync.Mutex
+	grants  map[entity.GrantID]*entity.Grant
+	saveErr error
+}
+
+func newMockGrantRepo() *mockGrantRepo {
+	return &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant)}
+}
+
+func (m *mockGrantRepo) Save(_ context.Context, g *entity.Grant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	cp := *g
+	m.grants[g.ID] = &cp
+	return nil
+}
+
+func (m *mockGrantRepo) FindByID(_ context.Context, grantID entity.GrantID) (*entity.Grant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if g, ok := m.grants[grantID]; ok {
+		cp := *g
+		return &cp, nil
+	}
+	return nil, coreerror.ErrNotFound
+}
+
+func (m *mockGrantRepo) Revoke(_ context.Context, grantID entity.GrantID, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.grants[grantID]
+	if !ok || g.RevokedAt != nil {
+		return coreerror.ErrNotFound
+	}
+	g.RevokedAt = &at
+	return nil
+}
+
 // ── mock ClientRegistry ───────────────────────────────────────────────────────
 
 const testClientSecret = "test-secret-1"

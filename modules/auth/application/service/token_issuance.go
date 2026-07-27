@@ -29,10 +29,13 @@ func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedT
 	// landed has an empty ExistingGrantID, so it joins a freshly minted grant
 	// on its first rotation. Because grantID feeds both GenAccessToken and the
 	// returned IssuedTokens, the sid claim in the access token and the GrantID
-	// on the new refresh token cannot disagree (grant-linkage.md §5).
+	// on the new refresh token cannot disagree (grant-linkage.md §5), so the
+	// persisted grant and the sid claim cannot diverge.
 	grantID := req.ExistingGrantID
+	var newGrant *entity.Grant
 	if grantID == "" {
-		grantID = entity.NewGrantID()
+		newGrant = entity.NewGrant(req.User.ID, req.ClientID)
+		grantID = newGrant.ID
 	}
 
 	accessToken, err := s.issuer.GenAccessToken(string(req.User.ID), req.Scope.String(), string(grantID), req.ExpireSecs)
@@ -67,5 +70,6 @@ func (s *TokenIssuanceService) IssueTokens(req IssueTokensArgs) (*entity.IssuedT
 		IDToken:      idToken,
 		Scope:        req.Scope,
 		GrantID:      grantID,
+		NewGrant:     newGrant,
 	}, nil
 }

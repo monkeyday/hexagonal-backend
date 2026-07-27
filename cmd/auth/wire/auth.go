@@ -48,6 +48,21 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		refreshTokenRepo = r
 	}
 
+	var grantRepo port.GrantRepository
+	if cfg.RepositoryType == "mongo" {
+		r, err := adapterout.NewMongoGrantRepository(deps.MongoClient)
+		if err != nil {
+			panic(fmt.Sprintf("failed to initialize grant repository: %v", err))
+		}
+		grantRepo = r
+	} else {
+		r, err := adapterout.NewFileGrantRepository(deps.GrantStore)
+		if err != nil {
+			panic(fmt.Sprintf("failed to initialize grant repository: %v", err))
+		}
+		grantRepo = r
+	}
+
 	uow := deps.UnitOfWork
 	if uow == nil {
 		uow = &coreuow.NoopUnitOfWork{}
@@ -60,6 +75,7 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		Metrics:                     inframetrics.NewExpvarRecorder(),
 		UserRepo:                    userRepo,
 		RefreshTokenRepo:            refreshTokenRepo,
+		GrantRepo:                   grantRepo,
 		EmailSender:                 buildEmailSender(deps),
 		ClientRegistry:              buildClientRegistry(cfg.OAuth.Clients),
 		PostLogoutRedirectAllowlist: cfg.OAuth.PostLogoutRedirectAllowlist,

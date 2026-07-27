@@ -30,6 +30,7 @@ type ExchangeCodeCommand struct {
 type ExchangeCodeUseCase struct {
 	userRepo             port.UserRepository
 	refreshTokenRepo     port.RefreshTokenRepository
+	grantRepo            port.GrantRepository
 	cache                corecache.Cache
 	tokenIssuanceService *service.TokenIssuanceService
 	clientAuthenticator  *service.ClientAuthenticator
@@ -39,6 +40,7 @@ func NewExchangeCodeUseCase(deps define.Dependencies) usecase.UseCase {
 	return &ExchangeCodeUseCase{
 		userRepo:             deps.UserRepo,
 		refreshTokenRepo:     deps.RefreshTokenRepo,
+		grantRepo:            deps.GrantRepo,
 		cache:                deps.Cache,
 		tokenIssuanceService: service.NewTokenIssuanceService(deps.JWTSvc),
 		clientAuthenticator:  service.NewClientAuthenticator(deps.ClientRegistry),
@@ -114,6 +116,11 @@ func (uc *ExchangeCodeUseCase) issueTokens(clientID entity.ClientID, expireSecs 
 }
 
 func (uc *ExchangeCodeUseCase) saveRefreshToken(ctx context.Context, userID entity.UserID, clientID entity.ClientID, tokens *entity.IssuedTokens) error {
+	if tokens.NewGrant != nil {
+		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
+			return err
+		}
+	}
 	rt := entity.NewRefreshToken(userID, clientID, tokens)
 	return uc.refreshTokenRepo.Save(ctx, rt)
 }
