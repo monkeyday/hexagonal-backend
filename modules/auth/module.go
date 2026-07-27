@@ -6,7 +6,7 @@ import (
 	coreerror "sc/core/error"
 	coremetrics "sc/core/metrics"
 	"sc/core/usecase"
-	"sc/modules/auth/adapter"
+	adapter "sc/modules/auth/adapter/in"
 	"sc/modules/auth/application/command"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/application/query"

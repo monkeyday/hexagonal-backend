@@ -41,7 +41,7 @@ modules/
     application/  — use cases (command/, query/, service/)
     domain/       — entities and value objects
     port/         — outbound port interfaces
-    adapter/      — inbound HTTP router (router.go)
+    adapter/in/   — inbound adapters (router.go, revocation checker)
     adapter/out/  — outbound adapters (JWT, repos, email)
     errors/       — domain error codes
 handler/
