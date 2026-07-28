@@ -317,6 +317,43 @@ export default function (tokens) {
 
     const noRedirect = http.get(`${BASE_URL}/oidc/logout`, { redirects: 0 });
     check(noRedirect, { 'no redirect URI: status 200': (r) => r.status === 200 });
+
+    // Logout revokes only for a caller presenting a bearer token, and only the
+    // session that token belongs to (grant-linkage.md §1). Two independent
+    // sessions: one is ended, the other must survive.
+    const ended = getTokens();
+    const kept  = getTokens();
+
+    const authed = http.get(
+      `${BASE_URL}/oidc/logout?post_logout_redirect_uri=${encodeURIComponent(POST_LOGOUT_URI)}`,
+      { redirects: 0, headers: { Authorization: `Bearer ${ended.access_token}` } },
+    );
+    check(authed, { 'authenticated logout: status 302': (r) => r.status === 302 });
+
+    const endedMe = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${ended.access_token}` },
+      responseCallback: expectedStatuses(401),
+    });
+    check(endedMe, { 'logout ends its own session: status 401': (r) => r.status === 401 });
+
+    const keptMe = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${kept.access_token}` },
+    });
+    check(keptMe, { 'logout leaves other sessions signed in: status 200': (r) => r.status === 200 });
+
+    // The whole grant goes, not just the access token's jti.
+    const endedRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: ended.refresh_token,
+      }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(400, 401) },
+    );
+    check(endedRefresh, {
+      'logout revokes its grant refresh token: 4xx': (r) => r.status === 400 || r.status === 401,
+    });
   });
 
   // ── POST /api/v3/update-profile ───────────────────────────────────────────────
