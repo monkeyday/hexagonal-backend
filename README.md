@@ -2,6 +2,8 @@
 
 An OIDC server written in Go with a production-oriented hexagonal architecture, supporting Authorization Code Flow, refresh token rotation, brute-force lockout, and a broad OIDC/OAuth2 provider surface.
 
+**Read the write-up:** [Building an OIDC Provider from Scratch in Go](https://medium.com/@siwench/building-an-oidc-provider-from-scratch-in-go-dcedc1c44ad0)
+
 ---
 
 ## Prerequisites
