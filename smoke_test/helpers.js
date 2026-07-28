@@ -88,6 +88,10 @@ export const smokeOptions = {
   vus: 1,
   iterations: 1,
   thresholds: {
+    // Without this the suite gates on transport only: a check that fails on a
+    // response whose status was expected leaves k6 exiting 0, so every semantic
+    // assertion here would be advisory.
+    checks:            ['rate==1'],
     http_req_failed:   ['rate<0.01'],
     http_req_duration: ['p(95)<2000'],
   },

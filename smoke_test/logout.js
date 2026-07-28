@@ -47,10 +47,19 @@ export default function (tokens) {
     'no redirect URI: status 200': (r) => r.status === 200,
   });
 
+  // None of the calls above carried a bearer, so none of them may have revoked
+  // anything — id_token_hint rides along on cross-site GET navigations, and
+  // honouring it would let an attacker log a victim out (logout.go:53-63).
+  const survived = http.get(`${BASE_URL}/oidc/me`, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  });
+  check(survived, {
+    'bearer-less logout revokes nothing: status 200': (r) => r.status === 200,
+  });
+
   // ── Per-session revocation ──────────────────────────────────────────────────
-  // The calls above carry no bearer, so they never reach the revocation path:
-  // id_token_hint alone must not end a session (CSRF). With a bearer, logout
-  // ends exactly the session that token belongs to (grant-linkage.md §1).
+  // With a bearer, logout ends exactly the session that token belongs to
+  // (grant-linkage.md §1).
   const ended = getTokens();
   const kept  = getTokens();
 
@@ -70,6 +79,23 @@ export default function (tokens) {
     headers: { Authorization: `Bearer ${kept.access_token}` },
   });
   check(keptMe, { 'logout leaves other sessions signed in: status 200': (r) => r.status === 200 });
+
+  // The assertion that actually distinguishes per-session from user-wide
+  // revocation. A regression to RevokeAllForUser would revoke *both* sessions'
+  // refresh tokens while leaving this stateless access token valid until exp,
+  // so the check above would still pass — only this one fails.
+  const keptRefresh = http.post(
+    `${BASE_URL}/token`,
+    JSON.stringify({
+      grant_type:    'refresh_token',
+      client_id:     'smoke-client',
+      refresh_token: kept.refresh_token,
+    }),
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  check(keptRefresh, {
+    'logout leaves the other session refreshable: status 200': (r) => r.status === 200,
+  });
 
   const endedRefresh = http.post(
     `${BASE_URL}/token`,

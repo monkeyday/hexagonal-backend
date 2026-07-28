@@ -69,7 +69,10 @@ export function perEndpointThresholds(endpoints, p95 = 800) {
   const pairs = Array.isArray(endpoints)
     ? endpoints.map((name) => [name, p95])
     : Object.entries(endpoints);
-  const t = { http_req_failed: ['rate<0.01'] };
+  // `checks` belongs here for the reason the doc comment above already gives —
+  // correctness gates the run. Without it a failed check on an expected-status
+  // response leaves k6 exiting 0.
+  const t = { checks: ['rate==1'], http_req_failed: ['rate<0.01'] };
   for (const [name, limit] of pairs) {
     t[`http_req_duration{endpoint:${name}}`] = [`p(95)<${override ?? limit}`];
   }

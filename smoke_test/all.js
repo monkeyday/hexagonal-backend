@@ -340,6 +340,15 @@ export default function (tokens) {
     const noRedirect = http.get(`${BASE_URL}/oidc/logout`, { redirects: 0 });
     check(noRedirect, { 'no redirect URI: status 200': (r) => r.status === 200 });
 
+    // Neither call above carried a bearer, so neither may have revoked anything:
+    // id_token_hint rides along on cross-site GET navigations (logout.go:53-63).
+    const survived = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${fresh.access_token}` },
+    });
+    check(survived, {
+      'bearer-less logout revokes nothing: status 200': (r) => r.status === 200,
+    });
+
     // Logout revokes only for a caller presenting a bearer token, and only the
     // session that token belongs to (grant-linkage.md §1). Two independent
     // sessions: one is ended, the other must survive.
@@ -362,6 +371,22 @@ export default function (tokens) {
       headers: { Authorization: `Bearer ${kept.access_token}` },
     });
     check(keptMe, { 'logout leaves other sessions signed in: status 200': (r) => r.status === 200 });
+
+    // The assertion that actually distinguishes per-session from user-wide
+    // revocation: a regression to RevokeAllForUser would revoke *both* sessions'
+    // refresh tokens while leaving this access token valid until exp.
+    const keptRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: kept.refresh_token,
+      }),
+      { headers: JSON_HEADERS },
+    );
+    check(keptRefresh, {
+      'logout leaves the other session refreshable: status 200': (r) => r.status === 200,
+    });
 
     // The whole grant goes, not just the access token's jti.
     const endedRefresh = http.post(

@@ -555,12 +555,40 @@ else
     fail "old password still works after reset"
   fi
 
+  # The user-level marker stores Unix *seconds* and the comparison is inclusive
+  # (`iat <= invalidatedAt`, revocation_checker.go:45-47 — deliberate, for clock
+  # skew), so a token minted inside the same second as the reset is rejected by
+  # design. Wait past that second before asserting the positive case; without
+  # this the check below flakes rather than failing honestly.
+  sleep 1
+
   split_resp "$(do_req "$BASE_URL/token" -X POST \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=password&email=$EMAIL&password=$NEW_PASSWORD&expire_secs=3600")"
   check_status "POST /token (password) with new password" "200" "$STATUS"
   check_json   "new-password token response" "$BODY"
   check_field  "new-password token" "$BODY" "access_token"
+
+  # Minting a token is not the same as it working: the invalidation must apply to
+  # what existed before the reset and nothing after it.
+  # Both captured before the next request overwrites BODY.
+  NEW_AT=$(json_field "$BODY" access_token)
+  NEW_RT=$(json_field "$BODY" refresh_token)
+  if [ -n "$NEW_AT" ]; then
+    split_resp "$(do_req "$BASE_URL/oidc/me" -H "Authorization: Bearer $NEW_AT")"
+    check_status "post-reset access token accepted → 200" "200" "$STATUS"
+    check_active "post-reset access token" "$NEW_AT" "true"
+
+    # The refresh half too: the user-level marker must not outlive the reset for
+    # the new session's chain either.
+    split_resp "$(do_req "$BASE_URL/token" -X POST \
+      -u "$CLIENT_ID:$CLIENT_SECRET" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "grant_type=refresh_token&client_id=$CLIENT_ID&refresh_token=$NEW_RT")"
+    check_status "post-reset refresh token rotates → 200" "200" "$STATUS"
+  else
+    fail "post-reset token usable — skipped, no access token returned"
+  fi
 fi
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
