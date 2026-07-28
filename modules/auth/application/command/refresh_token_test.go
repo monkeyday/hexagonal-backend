@@ -14,6 +14,17 @@ import (
 	autherrors "sc/modules/auth/errors"
 	"testing"
 	"time"
+
+	"go.mongodb.org/mongo-driver/mongo"
+)
+
+// Server-side error shape for the grant-document write conflict. The labels are
+// string literals in mongo-driver's x/mongo/driver package, which is not part of
+// its public API, so they are named here rather than imported.
+const (
+	writeConflictErrorCode         = 112
+	transientTransactionErrorLabel = "TransientTransactionError"
+	networkErrorLabel              = "NetworkError"
 )
 
 func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
@@ -928,19 +939,25 @@ func TestRefreshTokenUseCase_UoWError(t *testing.T) {
 		return entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
 	}
 
-	newUseCase := func(uow interface {
+	newUseCaseWithGrants := func(uow interface {
 		Do(context.Context, func(context.Context) (any, error)) (any, error)
-	}, rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+	}, rtRepo *mockRefreshTokenRepo, grantRepo *mockGrantRepo) *usecase.Registry {
 		mod := usecase.NewRegistry()
 		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
 			UoW:              uow,
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(newTestUser()),
 			RefreshTokenRepo: rtRepo,
-			GrantRepo:        newMockGrantRepo(),
+			GrantRepo:        grantRepo,
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		return mod
+	}
+
+	newUseCase := func(uow interface {
+		Do(context.Context, func(context.Context) (any, error)) (any, error)
+	}, rtRepo *mockRefreshTokenRepo) *usecase.Registry {
+		return newUseCaseWithGrants(uow, rtRepo, newMockGrantRepo())
 	}
 
 	cmd := &RefreshTokenCommand{GrantType: "refresh_token", ClientID: "APP_ID", RefreshToken: "valid-refresh-token"}
@@ -998,6 +1015,66 @@ func TestRefreshTokenUseCase_UoWError(t *testing.T) {
 		}
 		if es.Code() != autherrors.InvalidRefreshToken {
 			t.Fatalf("got err_code %d, want %d (InvalidRefreshToken)", es.Code(), autherrors.InvalidRefreshToken)
+		}
+	})
+
+	// The seam between this use case's error wrapping and mongo-driver's retry
+	// contract. WithTransaction retries only what errorHasLabel finds, and that
+	// walk (mongo/errors.go:172-179, consulted at session.go:207) unwraps as it
+	// goes — so a wrapper here that drops the cause silently turns the write
+	// conflict on the grant document into a hard failure instead of the retry
+	// that grant-linkage.md §10 depends on. mongo_grant_write_conflict_test.go
+	// proves the driver half against a real Mongo but supplies its own wrapper;
+	// this asserts the production call site's wrapper, with no Mongo needed.
+	//
+	// The mongo-driver import in this package is test-only and deliberate: the
+	// contract under test is precisely the one between the two.
+	t.Run("transient labels survive the use case's error wrapping", func(t *testing.T) {
+		rt := newValidRT()
+
+		// Seed the grant so checkAndExtendGrant gets past FindByID's fail-open
+		// branch and reaches the Save that fails.
+		grantRepo := newMockGrantRepo()
+		grant := entity.NewGrant(rt.UserID, rt.ClientID)
+		grant.ID = rt.GrantID
+		grantRepo.grants[grant.ID] = grant
+
+		// Shaped like what the server returns when a concurrent Revoke has
+		// committed into this transaction's window.
+		grantRepo.saveErr = mongo.CommandError{
+			Code:    writeConflictErrorCode,
+			Name:    "WriteConflict",
+			Message: "Write conflict during plan execution and yielding is disabled.",
+			Labels:  []string{transientTransactionErrorLabel, networkErrorLabel},
+		}
+
+		_, err := newUseCaseWithGrants(&mockUoW{}, newMockRefreshTokenRepo(rt), grantRepo).Dispatch(ctx, cmd)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		// Confirms the error travelled through the production wrapper rather
+		// than escaping by some path that never wrapped it.
+		es, ok := err.(*coreerror.ErrorStruct)
+		if !ok {
+			t.Fatalf("expected *coreerror.ErrorStruct, got %T: %v", err, err)
+		}
+		if es.Code() != autherrors.GenRefreshTokenFailed {
+			t.Fatalf("got err_code %d, want %d (GenRefreshTokenFailed)", es.Code(), autherrors.GenRefreshTokenFailed)
+		}
+
+		var cmdErr mongo.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("errors.As could not recover the mongo.CommandError through the wrapper: %v", err)
+		}
+		if !cmdErr.HasErrorLabel(transientTransactionErrorLabel) {
+			t.Errorf("recovered CommandError lost the %s label", transientTransactionErrorLabel)
+		}
+		// IsNetworkError is errorHasLabel's only exported entry point
+		// (mongo/errors.go:182); there is no public API for an arbitrary label,
+		// so this stands in for the TransientTransactionError lookup itself —
+		// same walk, same unwrapping, over the same wrapped error.
+		if !mongo.IsNetworkError(err) {
+			t.Errorf("mongo-driver's own label walk did not penetrate the wrapper")
 		}
 	})
 }
