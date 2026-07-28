@@ -320,17 +320,44 @@ func TestRefreshTokenUseCase_GrantCheck(t *testing.T) {
 		assertGrantOutlives(t, stored, rotatedToken(t, rtRepo))
 	})
 
+	// A grant that cannot be stored must fail issuance rather than be swallowed,
+	// so later code may assume grant rows are complete.
+	t.Run("grant store fails — rotation fails, nothing persisted", func(t *testing.T) {
+		mod, rtRepo, grantRepo, rt := setup(t, nil)
+		rt.GrantID = "" // legacy row: this rotation mints and saves a grant
+		grantRepo.saveErr = errors.New("db down")
+
+		if _, err := dispatch(mod); err == nil {
+			t.Fatal("a grant-store failure must fail the rotation, not be swallowed")
+		}
+		if rtRepo.tokens[entity.Hash("new-refresh")] != nil {
+			t.Error("no refresh token may be persisted when its grant could not be saved")
+		}
+		if stored := rtRepo.tokens[rt.TokenHash]; stored == nil || stored.RevokedAt != nil {
+			t.Error("the presented token must be left unrevoked when the rotation fails")
+		}
+	})
+
 	// The legacy first rotation mints its grant outside the transaction, so it
 	// is the one issuing path where the grant is written before the transaction
 	// that saves the token it covers.
 	t.Run("legacy chain joining a fresh grant — the new grant covers the new token", func(t *testing.T) {
 		mod, rtRepo, grantRepo, rt := setup(t, nil)
 		rt.GrantID = "" // pre-linkage row: carries no grant of its own
+		ops := &opsLog{}
+		rtRepo.ops = ops
+		grantRepo.ops = ops
 
 		if _, err := dispatch(mod); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
+		// Grant first here too, even though this grant is written outside the
+		// rotation transaction: a partial write must not leave a token whose
+		// grant is missing.
+		if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+			t.Errorf("save order = %v, want [save_grant save_token]", got)
+		}
 		newRT := rotatedToken(t, rtRepo)
 		if len(grantRepo.grants) != 1 {
 			t.Fatalf("expected exactly one freshly minted grant, got %d", len(grantRepo.grants))

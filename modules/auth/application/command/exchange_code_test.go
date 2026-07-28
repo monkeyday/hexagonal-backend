@@ -69,6 +69,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 		extraCodes         []*entity.AuthCode
 		wantErrCode        coreerror.ErrCode
 		wantAnyErr         bool
+		wantNoRTPersisted  bool
 		wantRTPersisted    bool
 		wantGrantPersisted bool
 		wantIDTokenNonce   string
@@ -350,6 +351,16 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			jwtSvc:      &mockJwtService{},
 			wantErrCode: autherrors.InvalidClient,
 		},
+		{
+			// A grant that cannot be stored must fail issuance rather than be
+			// swallowed, so later code may assume grant rows are complete.
+			name:              "grant store fails — issuance fails, no refresh token persisted",
+			cmd:               base,
+			jwtSvc:            &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
+			grantRepoOverride: &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant), saveErr: errors.New("db down")},
+			wantAnyErr:        true,
+			wantNoRTPersisted: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -401,6 +412,9 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			if tc.wantAnyErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
+				}
+				if tc.wantNoRTPersisted && len(rtRepo.tokens) != 0 {
+					t.Errorf("refresh tokens persisted = %d, want 0 when issuance fails", len(rtRepo.tokens))
 				}
 				return
 			}

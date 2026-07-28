@@ -26,7 +26,9 @@ func TestGetTokenUseCase(t *testing.T) {
 		jwt              *mockJwtService
 		repo             *mockUserRepo
 		rtRepo           *mockRefreshTokenRepo
+		grantRepo        *mockGrantRepo
 		wantErrCode      coreerror.ErrCode
+		wantNoRTPersist  bool
 		wantToken        string
 		wantScope        string
 		wantExpires      int
@@ -140,6 +142,18 @@ func TestGetTokenUseCase(t *testing.T) {
 			wantErrCode: autherrors.GenTokenFailed,
 		},
 		{
+			// A grant that cannot be stored must fail issuance rather than be
+			// swallowed, so later code may assume grant rows are complete.
+			name:            "grant store fails — GenTokenFailed, no refresh token persisted",
+			cmd:             &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
+			jwt:             &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
+			repo:            newMockRepo(newTestUserWithValidPassword()),
+			rtRepo:          newMockRefreshTokenRepo(),
+			grantRepo:       &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant), saveErr: errors.New("db error")},
+			wantErrCode:     autherrors.GenTokenFailed,
+			wantNoRTPersist: true,
+		},
+		{
 			name:             "explicit scope without openid — id_token omitted",
 			cmd:              &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("email profile")},
 			jwt:              &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
@@ -154,7 +168,10 @@ func TestGetTokenUseCase(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ops := &opsLog{}
-			grantRepo := newMockGrantRepo()
+			grantRepo := tc.grantRepo
+			if grantRepo == nil {
+				grantRepo = newMockGrantRepo()
+			}
 			grantRepo.ops = ops
 			tc.rtRepo.ops = ops
 			mod := usecase.NewRegistry()
@@ -173,6 +190,9 @@ func TestGetTokenUseCase(t *testing.T) {
 				}
 				if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != tc.wantErrCode {
 					t.Fatalf("got err_code %v, want %d", err, tc.wantErrCode)
+				}
+				if tc.wantNoRTPersist && len(tc.rtRepo.tokens) != 0 {
+					t.Errorf("refresh tokens persisted = %d, want 0 when issuance fails", len(tc.rtRepo.tokens))
 				}
 				return
 			}
