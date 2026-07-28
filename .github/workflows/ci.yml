@@ -201,7 +201,20 @@ jobs:
             curl -sf http://127.0.0.1:9876/.well-known/openid-configuration > /dev/null 2>&1 && break
             sleep 1
           done
-          k6 run smoke_test/all.js
+          # Every scenario file, not just all.js: the per-endpoint files carry
+          # assertions all.js does not (authorize error paths, unsupported_grant_type,
+          # the 404 on public /debug/vars). helpers.js is a module, not a scenario.
+          failed=""
+          for f in smoke_test/*.js; do
+            case "$f" in */helpers.js) continue ;; esac
+            echo "::group::k6 run $f"
+            k6 run "$f" || failed="$failed $f"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "failed smoke scenarios:$failed"
+            exit 1
+          fi
 
       - name: Show server log
         if: always()

@@ -43,7 +43,12 @@ func (ro *Router) registerPublicRoutes(r *gin.Engine) {
 	r.GET("/sign-in", webHandler.HandleHTML[query.GetSignInQuery](ro.module))
 	r.GET("/sign-up", signUp())
 	r.GET("/authorize", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
-	// endpoints of Keycloak for integrating with Supabase
+	// endpoints of Keycloak for integrating with Supabase. Each alias below is
+	// registered with the same handler chain as its canonical route — /auth is
+	// /authorize, /certs is /.well-known/jwks.json, /token is /token, and the
+	// /userinfo alias in registerOIDCRoutes is /userinfo. They add no behaviour,
+	// so the canonical routes' tests cover it; smoke_test/keycloak_aliases.js
+	// exists only to prove the registrations are still there.
 	kc := r.Group("/protocol/openid-connect")
 	kc.GET("/auth", webHandler.Handle[query.GetAuthorizeQuery](ro.module))
 	kc.GET("/certs", middleware.CachePublic(discoveryCacheTTL), webHandler.Handle[query.GetJWKSQuery](ro.module))
@@ -75,6 +80,7 @@ func (ro *Router) registerOIDCRoutes(r *gin.Engine) {
 	rev := newRevocationChecker(ro.cache)
 	auth := middleware.Authenticate(ro.jwtSvc, rev)
 	r.GET("/userinfo", auth, webHandler.Handle[query.GetProfileQuery](ro.module))
+	// Keycloak alias — same chain as /userinfo above; see registerPublicRoutes.
 	r.GET("/protocol/openid-connect/userinfo", auth, webHandler.Handle[query.GetProfileQuery](ro.module))
 
 	oidc := r.Group("/oidc")

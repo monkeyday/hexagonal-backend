@@ -1,5 +1,5 @@
 /**
- * Smoke test — GET /oidc/logout
+ * Smoke test — GET and POST /oidc/logout
  *
  * Run:  k6 run smoke_test/logout.js
  */
@@ -127,5 +127,36 @@ export default function (tokens) {
   );
   check(endedRefresh, {
     'logout revokes its grant refresh token: 4xx': (r) => r.status === 400 || r.status === 401,
+  });
+
+  // ── POST /oidc/logout ───────────────────────────────────────────────────────
+  // Same handler chain as the GET (router.go), so this asserts the route is
+  // wired to the logout command rather than merely registered: it must take the
+  // redirect URI from a form-encoded body and end the bearer's own session.
+  // RP-Initiated Logout 1.0 §2 permits either method.
+  const posted = getTokens();
+
+  const postLogout = http.post(
+    `${BASE_URL}/oidc/logout`,
+    { post_logout_redirect_uri: POST_LOGOUT_URI },
+    {
+      redirects: 0,
+      headers: { Authorization: `Bearer ${posted.access_token}` },
+    },
+  );
+  // 303, not the GET's 302: HTTPResponder.redirectStatus returns See Other for
+  // POST (http_responder.go:88-93) so the follow-up is a GET.
+  check(postLogout, {
+    'POST logout: status 303':               (r) => r.status === 303,
+    'POST logout: Location is redirect URI': (r) =>
+      (r.headers['Location'] || '').startsWith(POST_LOGOUT_URI),
+  });
+
+  const postedMe = http.get(`${BASE_URL}/oidc/me`, {
+    headers: { Authorization: `Bearer ${posted.access_token}` },
+    responseCallback: expectedStatuses(401),
+  });
+  check(postedMe, {
+    'POST logout ends its own session: status 401': (r) => r.status === 401,
   });
 }
