@@ -8,6 +8,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -152,12 +153,16 @@ func TestGetTokenUseCase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			ops := &opsLog{}
+			grantRepo := newMockGrantRepo()
+			grantRepo.ops = ops
+			tc.rtRepo.ops = ops
 			mod := usecase.NewRegistry()
 			mod.Register(GetTokenQuery{}, NewGetTokenUseCase(define.Dependencies{
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
-				GrantRepo:        newMockGrantRepo(),
+				GrantRepo:        grantRepo,
 				ScopeAllowlist:   defaultAllowlist,
 			}))
 			result, err := mod.Dispatch(ctx, tc.cmd)
@@ -205,6 +210,17 @@ func TestGetTokenUseCase(t *testing.T) {
 			rtHash := entity.Hash(resp.RefreshToken)
 			if tc.rtRepo.tokens[rtHash] == nil {
 				t.Error("refresh token should be persisted in the repository")
+			}
+			// Grant first: a partial write then leaves an orphan grant, which is
+			// harmless, rather than a refresh token whose grant is missing.
+			if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+				t.Errorf("save order = %v, want [save_grant save_token]", got)
+			}
+			if stored := grantRepo.grants[tc.rtRepo.tokens[rtHash].GrantID]; stored != nil {
+				if !stored.ExpiresAt.After(tc.rtRepo.tokens[rtHash].ExpiresAt) {
+					t.Errorf("grant ExpiresAt = %v, want strictly after the token's %v",
+						stored.ExpiresAt, tc.rtRepo.tokens[rtHash].ExpiresAt)
+				}
 			}
 			if tc.jwt.capturedAccessUserID != "user-1" {
 				t.Errorf("capturedAccessUserID = %q, want user-1", tc.jwt.capturedAccessUserID)

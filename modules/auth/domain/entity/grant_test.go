@@ -40,9 +40,9 @@ func TestNewGrant(t *testing.T) {
 			if g.RevokedAt != nil {
 				t.Error("RevokedAt must be nil on a fresh grant")
 			}
-			wantExpiry := g.CreatedAt.Add(RefreshTokenTTL)
+			wantExpiry := g.CreatedAt.Add(RefreshTokenTTL + grantExpiryMargin)
 			if !g.ExpiresAt.Equal(wantExpiry) {
-				t.Errorf("ExpiresAt = %v, want CreatedAt+RefreshTokenTTL = %v", g.ExpiresAt, wantExpiry)
+				t.Errorf("ExpiresAt = %v, want CreatedAt+RefreshTokenTTL+margin = %v", g.ExpiresAt, wantExpiry)
 			}
 			if g.CreatedAt.Before(before) || g.CreatedAt.After(after) {
 				t.Errorf("CreatedAt = %v, want between %v and %v", g.CreatedAt, before, after)
@@ -81,17 +81,27 @@ func TestGrantIsValid(t *testing.T) {
 	})
 }
 
-func TestGrantExtendExpiry(t *testing.T) {
-	t.Run("pushes expiry to a full TTL from now", func(t *testing.T) {
+func TestGrantExtendToCover(t *testing.T) {
+	t.Run("expiry lands strictly past the token it covers", func(t *testing.T) {
 		g := NewGrant(UserID("u"), ClientID("c"))
 		g.ExpiresAt = time.Now().Add(time.Hour) // nearly collected
 
-		before := time.Now()
-		g.ExtendExpiry()
-		after := time.Now()
+		tokenExpiry := time.Now().Add(RefreshTokenTTL)
+		g.ExtendToCover(tokenExpiry)
 
-		if g.ExpiresAt.Before(before.Add(RefreshTokenTTL)) || g.ExpiresAt.After(after.Add(RefreshTokenTTL)) {
-			t.Errorf("ExpiresAt = %v, want between %v and %v", g.ExpiresAt, before.Add(RefreshTokenTTL), after.Add(RefreshTokenTTL))
+		if !g.ExpiresAt.After(tokenExpiry) {
+			t.Errorf("ExpiresAt = %v, want strictly after the token expiry %v", g.ExpiresAt, tokenExpiry)
+		}
+	})
+
+	t.Run("covers a token that outlives the grant's current expiry", func(t *testing.T) {
+		g := NewGrant(UserID("u"), ClientID("c"))
+		tokenExpiry := g.ExpiresAt.Add(time.Hour) // token issued past the grant's window
+
+		g.ExtendToCover(tokenExpiry)
+
+		if !g.ExpiresAt.After(tokenExpiry) {
+			t.Errorf("ExpiresAt = %v, want strictly after the token expiry %v", g.ExpiresAt, tokenExpiry)
 		}
 	})
 
@@ -100,7 +110,7 @@ func TestGrantExtendExpiry(t *testing.T) {
 		now := time.Now()
 		g.RevokedAt = &now
 
-		g.ExtendExpiry()
+		g.ExtendToCover(time.Now().Add(RefreshTokenTTL))
 
 		if g.IsValid() {
 			t.Error("extending expiry must not resurrect a revoked grant")

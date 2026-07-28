@@ -184,6 +184,9 @@ func TestTokenIssuanceService_IssueTokens(t *testing.T) {
 		if string(resp.GrantID) != "existing-grant-1" {
 			t.Errorf("IssuedTokens.GrantID = %q, want existing-grant-1", resp.GrantID)
 		}
+		if resp.NewGrant != nil {
+			t.Errorf("NewGrant = %+v, want nil — rotating an existing grant must not mint another", resp.NewGrant)
+		}
 	})
 
 	t.Run("empty ExistingGrantID mints a fresh non-empty grant used consistently", func(t *testing.T) {
@@ -212,6 +215,22 @@ func TestTokenIssuanceService_IssueTokens(t *testing.T) {
 		if string(resp.GrantID) != jwtSvc.capturedGrantID {
 			t.Errorf("IssuedTokens.GrantID = %q, want same as minted grantID = %q",
 				resp.GrantID, jwtSvc.capturedGrantID)
+		}
+		// The single-mint invariant: the entity handed to the use case for
+		// persistence is the same grant the sid claims were signed with, so the
+		// stored row and the claim cannot diverge.
+		if resp.NewGrant == nil {
+			t.Fatal("NewGrant = nil, want the minted grant for the use case to persist")
+		}
+		if string(resp.NewGrant.ID) != jwtSvc.capturedGrantID {
+			t.Errorf("NewGrant.ID = %q, want same as the signed grantID = %q",
+				resp.NewGrant.ID, jwtSvc.capturedGrantID)
+		}
+		if resp.NewGrant.UserID != user.ID {
+			t.Errorf("NewGrant.UserID = %q, want %q", resp.NewGrant.UserID, user.ID)
+		}
+		if string(resp.NewGrant.ClientID) != "client-1" {
+			t.Errorf("NewGrant.ClientID = %q, want client-1", resp.NewGrant.ClientID)
 		}
 	})
 }

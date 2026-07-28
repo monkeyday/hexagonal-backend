@@ -7,6 +7,7 @@ import (
 	corejwt "sc/core/jwt"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -199,9 +200,33 @@ func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (in
 
 // ── mock RefreshTokenRepository ───────────────────────────────────────────────
 
+// opsLog records the order in which mock repositories were called, so a test can
+// assert that a grant is persisted before the refresh token it covers. The
+// command package has its own copy: test helpers do not cross package lines.
+type opsLog struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (l *opsLog) record(op string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ops = append(l.ops, op)
+}
+
+func (l *opsLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.ops)
+}
+
 type mockRefreshTokenRepo struct {
 	tokens  map[string]*entity.RefreshToken
 	saveErr error
+	ops     *opsLog
 }
 
 func newMockRefreshTokenRepo(tokens ...*entity.RefreshToken) *mockRefreshTokenRepo {
@@ -213,6 +238,7 @@ func newMockRefreshTokenRepo(tokens ...*entity.RefreshToken) *mockRefreshTokenRe
 }
 
 func (m *mockRefreshTokenRepo) Save(_ context.Context, rt *entity.RefreshToken) error {
+	m.ops.record("save_token")
 	if m.saveErr != nil {
 		return m.saveErr
 	}
@@ -258,6 +284,7 @@ type mockGrantRepo struct {
 	mu      sync.Mutex
 	grants  map[entity.GrantID]*entity.Grant
 	saveErr error
+	ops     *opsLog
 }
 
 func newMockGrantRepo() *mockGrantRepo {
@@ -267,6 +294,7 @@ func newMockGrantRepo() *mockGrantRepo {
 func (m *mockGrantRepo) Save(_ context.Context, g *entity.Grant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ops.record("save_grant")
 	if m.saveErr != nil {
 		return m.saveErr
 	}

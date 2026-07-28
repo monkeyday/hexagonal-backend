@@ -131,15 +131,28 @@ func (uc *RevokeTokenUseCase) Execute(ctx context.Context, cmd any) (any, error)
 // grant, and to a cache marker so stateless access tokens stop verifying
 // (RFC 7009 §2.1). The grant goes first: it is the durable record a rotation
 // committing mid-sweep cannot escape (grant-linkage.md §10).
-// ErrNotFound from RevokeByTokenHash means the token was revoked in a concurrent
-// request between FindByTokenHash and now — treat as success without sweeping the
-// grant (the concurrent winner already did it).
+// RevokeByTokenHash reports ErrNotFound for any row it will not transition,
+// which the entity already in hand tells apart:
+//
+//   - expired and never revoked — spent on its own, no session left to tear
+//     down, so this stays the silent success RFC 7009 §2.2 asks for;
+//   - already revoked — either a concurrent revocation, or the residue of an
+//     earlier attempt of this same request that died part-way through the
+//     cascade below. Neither can be assumed to have finished, so the cascade
+//     runs (again, if need be): each of its three steps is idempotent.
+//
+// Cascading unconditionally is what makes the endpoint safe to retry. The cost
+// is that repeat submissions of a dead token repeat the cascade, so the
+// revocations counter measures completed revocation *requests* rather than
+// distinct revocation events.
 func (uc *RevokeTokenUseCase) revokeConfirmedRefreshToken(ctx context.Context, rt *entity.RefreshToken) error {
 	if err := uc.refreshTokenRepo.RevokeByTokenHash(ctx, rt.TokenHash); err != nil {
-		if errors.Is(err, coreerror.ErrNotFound) {
+		if !errors.Is(err, coreerror.ErrNotFound) {
+			return err
+		}
+		if rt.RevokedAt == nil && !rt.IsValid() {
 			return nil
 		}
-		return err
 	}
 	if rt.GrantID != "" {
 		// ErrNotFound: the grant predates this record, or a concurrent revocation

@@ -298,6 +298,7 @@ func newMockRefreshTokenRepo(tokens ...*entity.RefreshToken) *mockRefreshTokenRe
 func (m *mockRefreshTokenRepo) Save(_ context.Context, rt *entity.RefreshToken) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ops.record("save_token")
 	if m.saveErr != nil {
 		return m.saveErr
 	}
@@ -392,6 +393,7 @@ func newMockGrantRepo() *mockGrantRepo {
 func (m *mockGrantRepo) Save(_ context.Context, g *entity.Grant) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ops.record("save_grant")
 	if m.saveErr != nil {
 		return m.saveErr
 	}

@@ -96,13 +96,17 @@ func (uc *GetTokenUseCase) Execute(ctx context.Context, query any) (any, error) 
 		return nil, err
 	}
 
+	// Built before the grant is saved so the grant can be aligned to the token's
+	// expiry; the grant is still the first of the two to be persisted.
+	rt := entity.NewRefreshToken(user.ID, "", tokens)
+
 	if tokens.NewGrant != nil {
+		tokens.NewGrant.ExtendToCover(rt.ExpiresAt)
 		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
 			return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
 		}
 	}
 
-	rt := entity.NewRefreshToken(user.ID, "", tokens)
 	if err := uc.refreshTokenRepo.Save(ctx, rt); err != nil {
 		return nil, coreerror.NewErr(autherrors.GenTokenFailed, err)
 	}

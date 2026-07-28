@@ -342,14 +342,15 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-ordered", Scope: entity.MustParseScope("openid")})
 		rt.GrantID = grantID
 		rtRepo := newMockRefreshTokenRepo(rt)
-		rtRepo.ops = ops
 		grantRepo := newMockGrantRepo()
-		grantRepo.ops = ops
 		grant := entity.NewGrant("user-1", "")
 		grant.ID = grantID
 		if err := grantRepo.Save(ctx, grant); err != nil {
 			t.Fatalf("seeding grant: %v", err)
 		}
+		// Attached after seeding so the log covers only the call under test.
+		rtRepo.ops = ops
+		grantRepo.ops = ops
 
 		deps := define.Dependencies{
 			JWTSvc: &mockJwtService{

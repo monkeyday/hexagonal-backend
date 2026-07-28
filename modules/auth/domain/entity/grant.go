@@ -2,6 +2,12 @@ package entity
 
 import "time"
 
+// grantExpiryMargin is how far past a refresh token's own expiry the grant that
+// authorises it is kept alive. Nothing about a grant should die before the chain
+// it covers, and the two expiries are stamped by different calls, so the margin
+// makes the ordering explicit rather than incidental.
+const grantExpiryMargin = time.Minute
+
 // Grant is the aggregate root for one authentication event: the linkage that
 // access tokens carry as their sid claim and that refresh tokens belong to. It
 // exists so grant-level state (revocation, expiry) has a durable home instead
@@ -18,9 +24,9 @@ type Grant struct {
 }
 
 // NewGrant mints a grant for a new authentication event. Like NewRefreshToken
-// it generates its own ID and timestamps. ExpiresAt starts as a RefreshTokenTTL
-// window from the authentication event and is extended by ExtendExpiry on every
-// rotation, so the grant always outlives its refresh chain.
+// it generates its own ID and timestamps. ExpiresAt starts as a defensive
+// default — a full RefreshTokenTTL window plus the margin — which every issuing
+// path then replaces via ExtendToCover once the refresh token it covers exists.
 // DeviceID is filled in once client support is established (exchange_code.go:27).
 //
 // The returned grant's ID feeds both the access-token sid claim and the
@@ -34,7 +40,7 @@ func NewGrant(userID UserID, clientID ClientID) *Grant {
 		ClientID:        clientID,
 		AuthenticatedAt: now,
 		CreatedAt:       now,
-		ExpiresAt:       now.Add(RefreshTokenTTL),
+		ExpiresAt:       now.Add(RefreshTokenTTL + grantExpiryMargin),
 	}
 }
 
@@ -42,10 +48,11 @@ func (g *Grant) IsValid() bool {
 	return g.RevokedAt == nil && time.Now().Before(g.ExpiresAt)
 }
 
-// ExtendExpiry pushes the grant's expiry out by a full RefreshTokenTTL from now.
-// A grant has no natural expiry — rotation renews its chain indefinitely — so
-// rotation calls this inside its transaction to keep the grant record alive for
-// at least as long as the refresh token it just issued (grant-linkage.md §10).
-func (g *Grant) ExtendExpiry() {
-	g.ExpiresAt = time.Now().Add(RefreshTokenTTL)
+// ExtendToCover pushes the grant's expiry past the expiry of the refresh token
+// it authorises. A grant has no natural expiry — rotation renews its chain
+// indefinitely — so every issuing path calls this with the expiry of the token
+// it just minted, which makes "the grant outlives its chain" hold by
+// construction rather than by a clock race (grant-linkage.md §10).
+func (g *Grant) ExtendToCover(tokenExpiry time.Time) {
+	g.ExpiresAt = tokenExpiry.Add(grantExpiryMargin)
 }

@@ -122,13 +122,20 @@ func (uc *RefreshTokenUseCase) Execute(ctx context.Context, cmd any) (any, error
 		return nil, err
 	}
 
+	// Built here rather than inside the transaction so its expiry is fixed before
+	// any grant is written: both the freshly minted grant below and the existing
+	// one extended inside updateRefreshToken are aligned to this exact value, and
+	// a transaction retry reuses it instead of stamping a later one.
+	newRT := rt.Rotate(user.ID, tokens)
+
 	if tokens.NewGrant != nil {
+		tokens.NewGrant.ExtendToCover(newRT.ExpiresAt)
 		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
 			return nil, autherrors.NewErrGenRefreshTokenFailed(err)
 		}
 	}
 
-	if err := uc.updateRefreshToken(ctx, rt, user.ID, rt.GrantID, tokens); err != nil {
+	if err := uc.updateRefreshToken(ctx, rt, newRT); err != nil {
 		return nil, err
 	}
 
@@ -179,7 +186,7 @@ func (uc *RefreshTokenUseCase) findActiveRefreshToken(ctx context.Context, raw s
 // authenticated before grants were persisted have nothing to check, and the
 // rotation falls through to the checks that already exist. PR9 flips this to
 // fail-closed once the TTL window has elapsed (grant-linkage.md §10).
-func (uc *RefreshTokenUseCase) checkAndExtendGrant(ctx context.Context, grantID entity.GrantID) error {
+func (uc *RefreshTokenUseCase) checkAndExtendGrant(ctx context.Context, grantID entity.GrantID, tokenExpiry time.Time) error {
 	if grantID == "" {
 		return nil
 	}
@@ -193,7 +200,7 @@ func (uc *RefreshTokenUseCase) checkAndExtendGrant(ctx context.Context, grantID 
 	if !grant.IsValid() {
 		return autherrors.NewErrInvalidRefreshToken()
 	}
-	grant.ExtendExpiry()
+	grant.ExtendToCover(tokenExpiry)
 	if err := uc.grantRepo.Save(ctx, grant); err != nil {
 		return autherrors.NewErrGenRefreshTokenFailed(err)
 	}
@@ -206,9 +213,9 @@ func (uc *RefreshTokenUseCase) checkAndExtendGrant(ctx context.Context, grantID 
 // the transaction retries, and the retry sees the revocation and rejects — the
 // grant document is the serialization point a multi-row sweep cannot be
 // (grant-linkage.md §10).
-func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *entity.RefreshToken, userID entity.UserID, grantID entity.GrantID, newTokens *entity.IssuedTokens) error {
+func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT, newRT *entity.RefreshToken) error {
 	_, err := uc.uow.Do(ctx, func(ctx context.Context) (any, error) {
-		if err := uc.checkAndExtendGrant(ctx, grantID); err != nil {
+		if err := uc.checkAndExtendGrant(ctx, oldRT.GrantID, newRT.ExpiresAt); err != nil {
 			return nil, err
 		}
 		if err := uc.refreshTokenRepo.RevokeByTokenHash(ctx, oldRT.TokenHash); err != nil {
@@ -217,7 +224,6 @@ func (uc *RefreshTokenUseCase) updateRefreshToken(ctx context.Context, oldRT *en
 			}
 			return nil, autherrors.NewErrGenRefreshTokenFailed(err)
 		}
-		newRT := oldRT.Rotate(userID, newTokens)
 		if err := uc.refreshTokenRepo.Save(ctx, newRT); err != nil {
 			return nil, autherrors.NewErrGenRefreshTokenFailed(err)
 		}

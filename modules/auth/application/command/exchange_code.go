@@ -116,12 +116,15 @@ func (uc *ExchangeCodeUseCase) issueTokens(clientID entity.ClientID, expireSecs 
 }
 
 func (uc *ExchangeCodeUseCase) saveRefreshToken(ctx context.Context, userID entity.UserID, clientID entity.ClientID, tokens *entity.IssuedTokens) error {
+	// Built before the grant is saved so the grant can be aligned to the token's
+	// expiry; the grant is still the first of the two to be persisted.
+	rt := entity.NewRefreshToken(userID, clientID, tokens)
 	if tokens.NewGrant != nil {
+		tokens.NewGrant.ExtendToCover(rt.ExpiresAt)
 		if err := uc.grantRepo.Save(ctx, tokens.NewGrant); err != nil {
 			return err
 		}
 	}
-	rt := entity.NewRefreshToken(userID, clientID, tokens)
 	return uc.refreshTokenRepo.Save(ctx, rt)
 }
 

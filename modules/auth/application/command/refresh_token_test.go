@@ -284,12 +284,31 @@ func TestRefreshTokenUseCase_GrantCheck(t *testing.T) {
 		}
 	})
 
+	// assertGrantOutlives is the assertion the whole extension mechanism exists
+	// for. Checking the grant against now+TTL instead would pass even when the
+	// grant expires first, which is precisely the failure it must catch.
+	assertGrantOutlives := func(t *testing.T, grant *entity.Grant, newRT *entity.RefreshToken) {
+		t.Helper()
+		if !grant.ExpiresAt.After(newRT.ExpiresAt) {
+			t.Errorf("grant ExpiresAt = %v, want strictly after the rotated token's %v",
+				grant.ExpiresAt, newRT.ExpiresAt)
+		}
+	}
+
+	rotatedToken := func(t *testing.T, rtRepo *mockRefreshTokenRepo) *entity.RefreshToken {
+		t.Helper()
+		newRT := rtRepo.tokens[entity.Hash("new-refresh")]
+		if newRT == nil {
+			t.Fatal("rotated refresh token not persisted")
+		}
+		return newRT
+	}
+
 	t.Run("active grant — ExpiresAt extended past the token just issued", func(t *testing.T) {
 		grant := entity.NewGrant("user-1", "")
 		grant.ExpiresAt = time.Now().Add(time.Hour) // close to collection
-		mod, _, grantRepo, rt := setup(t, grant)
+		mod, rtRepo, grantRepo, rt := setup(t, grant)
 
-		before := time.Now()
 		if _, err := dispatch(mod); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -298,9 +317,29 @@ func TestRefreshTokenUseCase_GrantCheck(t *testing.T) {
 		if stored == nil {
 			t.Fatal("grant not found after rotation")
 		}
-		if !stored.ExpiresAt.After(before.Add(entity.RefreshTokenTTL - time.Minute)) {
-			t.Errorf("ExpiresAt = %v, want extended to roughly now+RefreshTokenTTL (%v)", stored.ExpiresAt, before.Add(entity.RefreshTokenTTL))
+		assertGrantOutlives(t, stored, rotatedToken(t, rtRepo))
+	})
+
+	// The legacy first rotation mints its grant outside the transaction, so it
+	// is the one issuing path where the grant is written before the transaction
+	// that saves the token it covers.
+	t.Run("legacy chain joining a fresh grant — the new grant covers the new token", func(t *testing.T) {
+		mod, rtRepo, grantRepo, rt := setup(t, nil)
+		rt.GrantID = "" // pre-linkage row: carries no grant of its own
+
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
+
+		newRT := rotatedToken(t, rtRepo)
+		if len(grantRepo.grants) != 1 {
+			t.Fatalf("expected exactly one freshly minted grant, got %d", len(grantRepo.grants))
+		}
+		stored := grantRepo.grants[newRT.GrantID]
+		if stored == nil {
+			t.Fatalf("the rotated token's grant %q was not persisted", newRT.GrantID)
+		}
+		assertGrantOutlives(t, stored, newRT)
 	})
 }
 
@@ -460,14 +499,15 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-ordered", Scope: entity.MustParseScope("openid")})
 		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
 		rtRepo := newMockRefreshTokenRepo(stolen)
-		rtRepo.ops = ops
 		grantRepo := newMockGrantRepo()
-		grantRepo.ops = ops
 		grant := entity.NewGrant("user-1", "")
 		grant.ID = stolen.GrantID
 		if err := grantRepo.Save(ctx, grant); err != nil {
 			t.Fatalf("seeding grant: %v", err)
 		}
+		// Attached after seeding so the log covers only the call under test.
+		rtRepo.ops = ops
+		grantRepo.ops = ops
 
 		mod := usecase.NewRegistry()
 		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{

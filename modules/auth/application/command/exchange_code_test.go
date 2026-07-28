@@ -10,6 +10,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -365,6 +366,9 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			if grantRepo == nil {
 				grantRepo = newMockGrantRepo()
 			}
+			ops := &opsLog{}
+			rtRepo.ops = ops
+			grantRepo.ops = ops
 			mc := newMockCache().seed(fmt.Sprintf(define.AuthCodeCacheKey, "valid-code"), newValidCode())
 			for _, c := range tc.extraCodes {
 				mc.seed(fmt.Sprintf(define.AuthCodeCacheKey, c.Code), c)
@@ -419,6 +423,11 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			if tc.wantGrantPersisted {
 				if len(grantRepo.grants) == 0 {
 					t.Error("grant should be persisted in the repository")
+				}
+				// Grant first: a partial write then leaves an orphan grant, which
+				// is harmless, rather than a refresh token whose grant is missing.
+				if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+					t.Errorf("save order = %v, want [save_grant save_token]", got)
 				}
 			}
 			if tc.wantIDTokenNonce != "" {
