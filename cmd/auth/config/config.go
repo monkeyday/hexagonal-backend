@@ -45,6 +45,7 @@ type FileRepositoryConfig struct {
 	Dir                  string `validate:"required"`
 	UserFileName         string `validate:"required"`
 	RefreshTokenFileName string `validate:"required"`
+	GrantFileName        string `validate:"required"`
 }
 
 type OAuthConfig struct {
@@ -198,6 +199,7 @@ func parseFileRepositoryConfig() *FileRepositoryConfig {
 		Dir:                  os.Getenv("FILE_DIR"),
 		UserFileName:         os.Getenv("USER_FILE_PATH"),
 		RefreshTokenFileName: "refresh_tokens.json",
+		GrantFileName:        "grants.json",
 	}
 }
 

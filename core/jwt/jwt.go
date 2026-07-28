@@ -22,6 +22,7 @@ type Claims struct {
 	ID        string // JWT ID (jti claim)
 	ExpiresAt *time.Time
 	IssuedAt  *time.Time
+	GrantID   string // OIDC session ID (sid claim); empty for tokens issued before grant linkage
 }
 
 func (c *Claims) IsExpired() bool {

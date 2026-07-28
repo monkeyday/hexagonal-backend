@@ -24,6 +24,7 @@ type Deps struct {
 	Cache             corecache.Cache
 	FileStore         *filerepo.FileStore
 	RefreshTokenStore *filerepo.FileStore
+	GrantStore        *filerepo.FileStore
 	SMTPClient        *infrasmtp.Client
 	EmailCipher       *crypto.Cipher
 }
@@ -79,6 +80,13 @@ func NewDeps(cfg *config.Settings) Deps {
 			panic(err)
 		}
 		deps.RefreshTokenStore = rtStore
+
+		grantStore, err := filerepo.NewFileStore(cfg.FileRepository.Dir, cfg.FileRepository.GrantFileName)
+		if err != nil {
+			log.Err(err).Msg("Failed to initialize grant file store")
+			panic(err)
+		}
+		deps.GrantStore = grantStore
 	}
 
 	return deps

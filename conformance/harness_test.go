@@ -113,6 +113,14 @@ func buildEngine(t *testing.T, issuer string, cache *infracache.MemoryCache) *gi
 	if err != nil {
 		t.Fatalf("refresh repo: %v", err)
 	}
+	grantStore, err := filerepo.NewFileStore(dir, "grants.json")
+	if err != nil {
+		t.Fatalf("grant store: %v", err)
+	}
+	grantRepo, err := adapterout.NewFileGrantRepository(grantStore)
+	if err != nil {
+		t.Fatalf("grant repo: %v", err)
+	}
 
 	client, err := entity.NewClient(entity.ClientArgs{
 		ID:           testClientID,
@@ -132,6 +140,7 @@ func buildEngine(t *testing.T, issuer string, cache *infracache.MemoryCache) *gi
 		JWTSvc:           adapterout.NewJWTServiceAdapter(jwtSvc),
 		UserRepo:         userRepo,
 		RefreshTokenRepo: rtRepo,
+		GrantRepo:        grantRepo,
 		EmailSender:      adapterout.NewLogEmailSender(),
 		ClientRegistry:   adapterout.NewConfigClientRegistry(client),
 		ScopeAllowlist:   entity.SupportedScopes,

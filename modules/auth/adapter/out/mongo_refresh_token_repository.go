@@ -41,6 +41,12 @@ func NewMongoRefreshTokenRepository(client *mongorepo.MongoClient) (*MongoRefres
 			},
 		},
 		{
+			Keys: bson.D{
+				{Key: "grant_id", Value: 1},
+				{Key: "revoked_at", Value: 1},
+			},
+		},
+		{
 			Keys:    bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().SetExpireAfterSeconds(0),
 		},
@@ -92,6 +98,13 @@ func (r *MongoRefreshTokenRepository) RevokeByTokenHash(ctx context.Context, tok
 
 func (r *MongoRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID entity.UserID) error {
 	filter := bson.D{{Key: "user_id", Value: string(userID)}, {Key: "revoked_at", Value: nil}}
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "revoked_at", Value: time.Now()}}}}
+	_, err := r.col.UpdateMany(ctx, filter, update)
+	return err
+}
+
+func (r *MongoRefreshTokenRepository) RevokeAllForGrant(ctx context.Context, grantID entity.GrantID) error {
+	filter := bson.D{{Key: "grant_id", Value: string(grantID)}, {Key: "revoked_at", Value: nil}}
 	update := bson.D{{Key: "$set", Value: bson.D{{Key: "revoked_at", Value: time.Now()}}}}
 	_, err := r.col.UpdateMany(ctx, filter, update)
 	return err

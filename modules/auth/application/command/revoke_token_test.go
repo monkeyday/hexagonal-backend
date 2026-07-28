@@ -9,6 +9,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -27,6 +28,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 			JWTSvc:           jwtSvc,
 			Cache:            cache,
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry: newMockClientRegistry(
 				newTestClient(t, "public-client", entity.ClientAuthNone),
 				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
@@ -88,7 +90,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-abc123")
+		key := define.BlacklistKey("jti-abc123")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache, but not found", key)
 		}
@@ -124,7 +126,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-rt-hint")
+		key := define.BlacklistKey("jti-rt-hint")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache after RT-hint miss, not found", key)
 		}
@@ -219,7 +221,7 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected nil — access-token blacklist should succeed despite RT storage error, got: %v", err)
 		}
-		key := fmt.Sprintf(define.BlacklistCacheKey, "jti-fallthrough")
+		key := define.BlacklistKey("jti-fallthrough")
 		if _, ok := cache.items[key]; !ok {
 			t.Errorf("expected JTI %q in blacklist cache after fallthrough, not found", key)
 		}
@@ -272,8 +274,46 @@ func TestRevokeTokenUseCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := cache.items[fmt.Sprintf(define.BlacklistCacheKey, "")]; ok {
+		if _, ok := cache.items[define.BlacklistKey("")]; ok {
 			t.Error("empty JTI must not be written to blacklist cache")
+		}
+	})
+
+	t.Run("revoke refresh token with GrantID — siblings revoked and grant marker written", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		rt1 := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-1", Scope: entity.MustParseScope("openid")})
+		rt1.GrantID = grantID
+		rt2 := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-2", Scope: entity.MustParseScope("openid")})
+		rt2.GrantID = grantID
+		cache := newMockCache()
+		rtRepo := newMockRefreshTokenRepo(rt1, rt2)
+		_, err := newMod(&mockJwtService{}, cache, newMockRepo(newTestUser()), rtRepo).Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertRTRevoked(t, rtRepo, "rt-grant-1")
+		assertRTRevoked(t, rtRepo, "rt-grant-2") // grant-wide cascade
+		markerKey := define.RevokedGrantKey(grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache, not found", markerKey)
+		}
+	})
+
+	t.Run("revoke legacy refresh token (empty GrantID) — only that token revoked, no grant marker", func(t *testing.T) {
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = "" // legacy token issued before grant linkage
+		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-sib", Scope: entity.MustParseScope("openid")})
+		sibling.GrantID = ""
+		cache := newMockCache()
+		rtRepo := newMockRefreshTokenRepo(rt, sibling)
+		_, err := newMod(&mockJwtService{}, cache, newMockRepo(newTestUser()), rtRepo).Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-legacy"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertRTRevoked(t, rtRepo, "rt-legacy")
+		assertRTNotRevoked(t, rtRepo, "rt-legacy-sib") // legacy: no grant sweep
+		if len(cache.items) != 0 {
+			t.Errorf("expected empty cache for legacy token, got %d entries: %v", len(cache.items), cache.items)
 		}
 	})
 
@@ -323,6 +363,7 @@ func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
 			JWTSvc:           &mockJwtService{parseErr: fmt.Errorf("not a jwt")},
 			Cache:            newMockCache(),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry: newMockClientRegistry(
 				newTestClient(t, "public-client", entity.ClientAuthNone),
 				newTestClient(t, "conf-client", entity.ClientAuthSecretPost),
@@ -375,6 +416,165 @@ func TestRevokeTokenUseCase_ClientAuthentication(t *testing.T) {
 		}
 		if rt, _ := rtRepo.FindByTokenHash(ctx, entity.Hash("rt-1")); rt == nil || rt.RevokedAt != nil {
 			t.Error("token must stay active when client auth fails")
+		}
+	})
+}
+
+// TestRevokeTokenUseCase_GrantRevocation covers RFC 7009 §2.1's grant sweep gaining
+// the durable grant record (grant-linkage.md §10, PR8).
+func TestRevokeTokenUseCase_GrantRevocation(t *testing.T) {
+	ctx := context.Background()
+
+	seed := func(t *testing.T, grantRepo *mockGrantRepo, rtRepo *mockRefreshTokenRepo) (*usecase.Registry, entity.GrantID, *mockCache) {
+		t.Helper()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant", Scope: entity.MustParseScope("openid")})
+		rtRepo.tokens[rt.TokenHash] = rt
+		grant := entity.NewGrant("user-1", "")
+		grant.ID = rt.GrantID
+		if err := grantRepo.Save(ctx, grant); err != nil {
+			t.Fatalf("seeding grant: %v", err)
+		}
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(RevokeTokenCommand{}, NewRevokeTokenUseCase(define.Dependencies{
+			UserRepo:         newMockRepo(newTestUser()),
+			JWTSvc:           &mockJwtService{},
+			Cache:            cache,
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "public-client", entity.ClientAuthNone)),
+		}))
+		return mod, rt.GrantID, cache
+	}
+
+	t.Run("grant revoked before its rows are swept", func(t *testing.T) {
+		ops := &opsLog{}
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, grantID, _ := seed(t, grantRepo, rtRepo)
+		// Attached after seeding so the log covers only the dispatch under test.
+		rtRepo.ops = ops
+		grantRepo.ops = ops
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got := ops.all(); !slices.Equal(got, []string{"revoke_grant", "sweep_rows"}) {
+			t.Errorf("call order = %v, want [revoke_grant sweep_rows] — the durable record must be written before the non-atomic sweep", got)
+		}
+		if stored := grantRepo.grants[grantID]; stored == nil || stored.RevokedAt == nil {
+			t.Error("revocation must mark the grant itself, not only its rows")
+		}
+	})
+
+	t.Run("grant already revoked (concurrent winner) — sweep still runs, no error", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, grantID, _ := seed(t, grantRepo, rtRepo)
+		grantRepo.grants[grantID].RevokedAt = new(time.Now()) // ErrNotFound on Revoke
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+			t.Fatalf("an already-revoked grant must not fail the revocation: %v", err)
+		}
+		for _, rt := range rtRepo.tokens {
+			if rt.RevokedAt == nil {
+				t.Error("row sweep must still run when the grant was already revoked")
+			}
+		}
+	})
+
+	t.Run("grant store error — surfaced to the caller", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, _, _ := seed(t, grantRepo, rtRepo)
+		grantRepo.revokeErr = fmt.Errorf("db down")
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err == nil {
+			t.Error("a grant-store failure must be surfaced, not swallowed — revoke propagates its errors")
+		}
+	})
+
+	// A cascade that dies part-way leaves the submitted row revoked while the
+	// grant, its sibling rows and the marker may all still be live. The caller's
+	// natural response to the error is to retry, and the retry must finish the
+	// job instead of reading the already-revoked row as "someone else did it".
+	t.Run("retry after a failed cascade step completes the revocation", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			breakIt func(*mockGrantRepo, *mockRefreshTokenRepo, *mockCache)
+			repair  func(*mockGrantRepo, *mockRefreshTokenRepo, *mockCache)
+		}{
+			{
+				name:    "grant store",
+				breakIt: func(g *mockGrantRepo, _ *mockRefreshTokenRepo, _ *mockCache) { g.revokeErr = fmt.Errorf("db down") },
+				repair:  func(g *mockGrantRepo, _ *mockRefreshTokenRepo, _ *mockCache) { g.revokeErr = nil },
+			},
+			{
+				name:    "row sweep",
+				breakIt: func(_ *mockGrantRepo, r *mockRefreshTokenRepo, _ *mockCache) { r.revokeAllErr = fmt.Errorf("db down") },
+				repair:  func(_ *mockGrantRepo, r *mockRefreshTokenRepo, _ *mockCache) { r.revokeAllErr = nil },
+			},
+			{
+				name:    "cache marker",
+				breakIt: func(_ *mockGrantRepo, _ *mockRefreshTokenRepo, c *mockCache) { c.setErr = fmt.Errorf("redis down") },
+				repair:  func(_ *mockGrantRepo, _ *mockRefreshTokenRepo, c *mockCache) { c.setErr = nil },
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				rtRepo := newMockRefreshTokenRepo()
+				grantRepo := newMockGrantRepo()
+				mod, grantID, cache := seed(t, grantRepo, rtRepo)
+				sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{
+					RefreshToken: "rt-sibling",
+					GrantID:      grantID,
+					Scope:        entity.MustParseScope("openid"),
+				})
+				rtRepo.tokens[sibling.TokenHash] = sibling
+
+				tc.breakIt(grantRepo, rtRepo, cache)
+				if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err == nil {
+					t.Fatal("the failing cascade step must surface to the caller")
+				}
+
+				tc.repair(grantRepo, rtRepo, cache)
+				if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+					t.Fatalf("the retry must complete the revocation, got: %v", err)
+				}
+
+				if stored := grantRepo.grants[grantID]; stored == nil || stored.RevokedAt == nil {
+					t.Error("grant must be revoked once the retry succeeds")
+				}
+				if sw := rtRepo.tokens[sibling.TokenHash]; sw == nil || sw.RevokedAt == nil {
+					t.Error("sibling rows must be swept once the retry succeeds")
+				}
+				if _, ok := cache.items[define.RevokedGrantKey(grantID)]; !ok {
+					t.Error("the revoked-grant marker must be written once the retry succeeds")
+				}
+			})
+		}
+	})
+
+	// An expired token is spent on its own; there is no live session behind it,
+	// so it keeps RFC 7009 §2.2's silent success and must not sweep the grant.
+	t.Run("expired token — silent success, grant untouched", func(t *testing.T) {
+		rtRepo := newMockRefreshTokenRepo()
+		grantRepo := newMockGrantRepo()
+		mod, grantID, cache := seed(t, grantRepo, rtRepo)
+		for _, rt := range rtRepo.tokens {
+			rt.ExpiresAt = time.Now().Add(-time.Hour)
+		}
+
+		if _, err := mod.Dispatch(ctx, &RevokeTokenCommand{CallerID: "user-1", Token: "rt-grant"}); err != nil {
+			t.Fatalf("an expired token must be a silent success: %v", err)
+		}
+		if stored := grantRepo.grants[grantID]; stored != nil && stored.RevokedAt != nil {
+			t.Error("an expired token must not tear down the grant it belonged to")
+		}
+		if _, ok := cache.items[define.RevokedGrantKey(grantID)]; ok {
+			t.Error("an expired token must not write a revoked-grant marker")
 		}
 	})
 }

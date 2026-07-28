@@ -15,6 +15,7 @@ type Dependencies struct {
 	UserRepo                    port.UserRepository
 	EmailSender                 port.EmailSender
 	RefreshTokenRepo            port.RefreshTokenRepository
+	GrantRepo                   port.GrantRepository
 	ClientRegistry              port.ClientRegistry
 	PostLogoutRedirectAllowlist []string
 	ScopeAllowlist              []string

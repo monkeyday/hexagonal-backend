@@ -20,7 +20,10 @@ type TokenParser interface {
 // auth module's cache-key convention, keeping the delivery layer free of
 // module-specific knowledge.
 type RevocationChecker interface {
-	IsRevoked(ctx context.Context, jti string) (bool, error)
+	// IsRevoked reports whether the token's jti is blacklisted, its grant has been revoked,
+	// or its user invalidated all sessions after the token was issued. claims.GrantID is
+	// empty for tokens issued before grant linkage; that check is then skipped.
+	IsRevoked(ctx context.Context, claims *corejwt.Claims) (bool, error)
 }
 
 const (
@@ -30,6 +33,7 @@ const (
 	TokenKey              = "access_token"
 	IssuerKey             = "issuer"
 	UserIdKey             = "user_id"
+	GrantIdKey            = "grant_id"
 	BasicClientIDKey      = "basic_client_id"
 	BasicClientSecretKey  = "basic_client_secret"
 )
@@ -102,7 +106,7 @@ func verifyBearer(ctx *gin.Context, svc TokenParser, rev RevocationChecker) (*co
 		return nil, "", false
 	}
 	if rev != nil {
-		revoked, err := rev.IsRevoked(ctx.Request.Context(), claims.ID)
+		revoked, err := rev.IsRevoked(ctx.Request.Context(), claims)
 		if err != nil || revoked {
 			return nil, "", false
 		}
@@ -114,6 +118,9 @@ func setBearerIdentity(ctx *gin.Context, claims *corejwt.Claims, token string) {
 	ctx.Set(TokenKey, token)
 	ctx.Set(IssuerKey, claims.Issuer)
 	ctx.Set(UserIdKey, claims.Subject)
+	// GrantIdKey is empty for tokens issued before grant linkage (legacy tokens
+	// without a sid claim); the request proceeds normally in that case.
+	ctx.Set(GrantIdKey, claims.GrantID)
 }
 
 // extractBearerToken extracts the token from an Authorization header.

@@ -10,4 +10,5 @@ type RefreshTokenRepository interface {
 	FindByTokenHash(ctx context.Context, tokenHash string) (*entity.RefreshToken, error)
 	RevokeByTokenHash(ctx context.Context, tokenHash string) error
 	RevokeAllForUser(ctx context.Context, userID entity.UserID) error
+	RevokeAllForGrant(ctx context.Context, grantID entity.GrantID) error
 }

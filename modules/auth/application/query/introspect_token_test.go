@@ -99,6 +99,86 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 			cache:      &mockCache{items: make(map[string]any), getErr: errors.New("cache unavailable")},
 			wantActive: false,
 		},
+		{
+			name:  "grant revoked — inactive even though JTI is clean",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				Issuer:    "https://auth.example.com",
+				ID:        "jti-grant-check",
+				GrantID:   "grant-abc",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			cache:      newMockCache().seed(define.RevokedGrantKey("grant-abc"), true),
+			wantActive: false,
+		},
+		{
+			name:  "legacy token (no sid) — grant check skipped, JTI clean → active",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				Issuer:    "https://auth.example.com",
+				ID:        "jti-legacy",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+				Scope:     "openid",
+			}},
+			wantActive: true,
+			wantSub:    "user-1",
+		},
+		// ── third layer: sessions_invalidated marker ──────────────────────────
+		{
+			name:  "sessions invalidated before iat — inactive",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				ID:        "jti-session-check",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			// marker timestamp after the token's iat → token is rejected
+			cache:      newMockCache().seed(define.SessionsInvalidatedKey("user-1"), now.Unix()+1),
+			wantActive: false,
+		},
+		{
+			name:  "sessions invalidated at same second as iat — inactive (inclusive)",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				ID:        "jti-session-eq",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			cache:      newMockCache().seed(define.SessionsInvalidatedKey("user-1"), now.Unix()),
+			wantActive: false,
+		},
+		{
+			name:  "sessions invalidated after iat — active (token issued after reset)",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				ID:        "jti-session-after",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			// marker timestamp before the token's iat → token admitted
+			cache:      newMockCache().seed(define.SessionsInvalidatedKey("user-1"), now.Unix()-1),
+			wantActive: true,
+			wantSub:    "user-1",
+		},
+		{
+			name:  "sessions marker cache error — fail-closed inactive",
+			query: &IntrospectTokenQuery{BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token"},
+			jwt: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				ID:        "jti-marker-err",
+				ExpiresAt: new(now.Add(time.Hour)),
+				IssuedAt:  new(now),
+			}},
+			cache:      &mockCache{items: make(map[string]any), getErr: errors.New("cache unavailable")},
+			wantActive: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -152,6 +232,34 @@ func TestIntrospectTokenUseCase(t *testing.T) {
 			}
 		})
 	}
+
+	// Standalone: tokens without IssuedAt skip the user-level layer even when a marker exists.
+	t.Run("IssuedAt nil — user-level layer skipped, clean jti → active", func(t *testing.T) {
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{parseClaims: &corejwt.Claims{
+				Subject:   "user-1",
+				ID:        "jti-no-iat",
+				ExpiresAt: new(now.Add(time.Hour)),
+				// IssuedAt intentionally nil
+			}},
+			ClientRegistry: newMockClientRegistryOf(newTestClient(t, "conf-client", entity.ClientAuthSecretBasic)),
+			Cache:          newMockCache().seed(define.SessionsInvalidatedKey("user-1"), now.Unix()),
+		}
+		uc := NewIntrospectTokenUseCase(deps)
+		result, err := uc.Execute(ctx, &IntrospectTokenQuery{
+			BasicClientID: "conf-client", BasicClientSecret: testClientSecret, Token: "valid-token",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resp := result.(*define.IntrospectResponse)
+		if !resp.Active {
+			t.Error("token without IssuedAt must not be rejected by the sessions-invalidated layer")
+		}
+		if resp.Sub != "user-1" {
+			t.Errorf("Sub = %q, want %q", resp.Sub, "user-1")
+		}
+	})
 }
 
 func TestIntrospectTokenUseCase_Validation(t *testing.T) {

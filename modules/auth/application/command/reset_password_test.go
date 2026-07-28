@@ -103,6 +103,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 			UserRepo:         repo,
 			RefreshTokenRepo: &mockRefreshTokenRepo{tokens: make(map[string]*entity.RefreshToken), revokeAllErr: errors.New("db timeout")},
 			UoW:              &mockUoW{},
+			Cache:            newMockCache(),
 		}))
 		_, err := mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: newPassword})
 		if err != nil {
@@ -136,6 +137,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 					UserRepo:         repo,
 					RefreshTokenRepo: rtRepo,
 					UoW:              &mockUoW{},
+					Cache:            newMockCache(),
 				}))
 				_, errs[i] = mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: newPassword})
 			}(i)
@@ -171,6 +173,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 			UserRepo:         repo,
 			RefreshTokenRepo: newMockRefreshTokenRepo(),
 			UoW:              &mockUoW{},
+			Cache:            newMockCache(),
 		}))
 		_, _ = mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: "weak"})
 
@@ -189,6 +192,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 			UserRepo:         repo,
 			RefreshTokenRepo: &mockRefreshTokenRepo{tokens: make(map[string]*entity.RefreshToken), revokeAllErr: errors.New("db timeout")},
 			UoW:              &mockUoW{},
+			Cache:            newMockCache(),
 		}))
 		_, err := mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: newPassword})
 		if err != nil {
@@ -204,6 +208,52 @@ func TestResetPasswordUseCase(t *testing.T) {
 		}
 	})
 
+	t.Run("marker written with correct user ID and same instant as entity", func(t *testing.T) {
+		repo := newUserWithResetToken(rawToken, false)
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(ResetPasswordCommand{}, NewResetPasswordUseCase(define.Dependencies{
+			UserRepo:         repo,
+			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			UoW:              &mockUoW{},
+			Cache:            cache,
+		}))
+		_, err := mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: newPassword})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		user, _ := repo.FindByID(ctx, "user-1")
+		if user == nil || user.SessionsInvalidatedAt == nil {
+			t.Fatal("user not found or SessionsInvalidatedAt not set")
+		}
+
+		markerKey := define.SessionsInvalidatedKey("user-1")
+		var storedUnix int64
+		if !cache.Get(ctx, markerKey, &storedUnix) {
+			t.Fatal("sessions_invalidated marker not written to cache")
+		}
+		if storedUnix != user.SessionsInvalidatedAt.Unix() {
+			t.Errorf("marker unix = %d, want %d (SessionsInvalidatedAt)", storedUnix, user.SessionsInvalidatedAt.Unix())
+		}
+	})
+
+	t.Run("cache-write failure on marker — reset still succeeds (best-effort)", func(t *testing.T) {
+		repo := newUserWithResetToken(rawToken, false)
+		cache := &mockCache{items: make(map[string]any), setErr: errors.New("redis down")}
+		mod := usecase.NewRegistry()
+		mod.Register(ResetPasswordCommand{}, NewResetPasswordUseCase(define.Dependencies{
+			UserRepo:         repo,
+			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			UoW:              &mockUoW{},
+			Cache:            cache,
+		}))
+		_, err := mod.Dispatch(ctx, &ResetPasswordCommand{Token: rawToken, Password: newPassword})
+		if err != nil {
+			t.Errorf("cache failure must not propagate — got: %v", err)
+		}
+	})
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rtRepo := tc.rtRepo
@@ -215,6 +265,7 @@ func TestResetPasswordUseCase(t *testing.T) {
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: rtRepo,
 				UoW:              &mockUoW{},
+				Cache:            newMockCache(),
 			}))
 			_, err := mod.Dispatch(ctx, tc.cmd)
 

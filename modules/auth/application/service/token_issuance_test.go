@@ -16,9 +16,13 @@ type mockJwtService struct {
 	refreshErr       error
 	idTokenErr       error
 	genIDTokenCalled bool
+	// captured arguments
+	capturedGrantID        string
+	capturedIDTokenGrantID string
 }
 
-func (m *mockJwtService) GenAccessToken(_, _ string, _ int) (string, error) {
+func (m *mockJwtService) GenAccessToken(_, _, grantID string, _ int) (string, error) {
+	m.capturedGrantID = grantID
 	return m.accessToken, m.accessErr
 }
 
@@ -26,8 +30,9 @@ func (m *mockJwtService) GenRefreshToken(_ string) (string, error) {
 	return m.refreshToken, m.refreshErr
 }
 
-func (m *mockJwtService) GenIDToken(_ port.IDTokenArgs) (string, error) {
+func (m *mockJwtService) GenIDToken(args port.IDTokenArgs) (string, error) {
 	m.genIDTokenCalled = true
+	m.capturedIDTokenGrantID = args.GrantID
 	return m.idToken, m.idTokenErr
 }
 
@@ -150,6 +155,82 @@ func TestTokenIssuanceService_IssueTokens(t *testing.T) {
 		}
 		if jwtSvc.genIDTokenCalled {
 			t.Error("GenIDToken should not have been called when scope lacks openid")
+		}
+	})
+
+	t.Run("ExistingGrantID propagates to GenAccessToken, IDTokenArgs, and IssuedTokens", func(t *testing.T) {
+		jwtSvc := &mockJwtService{
+			accessToken:  "at",
+			refreshToken: "rt",
+			idToken:      "it",
+		}
+		svc := NewTokenIssuanceService(jwtSvc)
+		resp, err := svc.IssueTokens(IssueTokensArgs{
+			User:            user,
+			ClientID:        "client-1",
+			Scope:           entity.MustParseScope("openid"),
+			ExpireSecs:      3600,
+			ExistingGrantID: "existing-grant-1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if jwtSvc.capturedGrantID != "existing-grant-1" {
+			t.Errorf("GenAccessToken received grantID = %q, want existing-grant-1", jwtSvc.capturedGrantID)
+		}
+		if jwtSvc.capturedIDTokenGrantID != "existing-grant-1" {
+			t.Errorf("GenIDToken received GrantID = %q, want existing-grant-1", jwtSvc.capturedIDTokenGrantID)
+		}
+		if string(resp.GrantID) != "existing-grant-1" {
+			t.Errorf("IssuedTokens.GrantID = %q, want existing-grant-1", resp.GrantID)
+		}
+		if resp.NewGrant != nil {
+			t.Errorf("NewGrant = %+v, want nil — rotating an existing grant must not mint another", resp.NewGrant)
+		}
+	})
+
+	t.Run("empty ExistingGrantID mints a fresh non-empty grant used consistently", func(t *testing.T) {
+		jwtSvc := &mockJwtService{
+			accessToken:  "at",
+			refreshToken: "rt",
+			idToken:      "it",
+		}
+		svc := NewTokenIssuanceService(jwtSvc)
+		resp, err := svc.IssueTokens(IssueTokensArgs{
+			User:       user,
+			ClientID:   "client-1",
+			Scope:      entity.MustParseScope("openid"),
+			ExpireSecs: 3600,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if jwtSvc.capturedGrantID == "" {
+			t.Error("GenAccessToken should receive a non-empty minted grantID")
+		}
+		if jwtSvc.capturedIDTokenGrantID != jwtSvc.capturedGrantID {
+			t.Errorf("GenIDToken GrantID = %q, want same as GenAccessToken grantID = %q",
+				jwtSvc.capturedIDTokenGrantID, jwtSvc.capturedGrantID)
+		}
+		if string(resp.GrantID) != jwtSvc.capturedGrantID {
+			t.Errorf("IssuedTokens.GrantID = %q, want same as minted grantID = %q",
+				resp.GrantID, jwtSvc.capturedGrantID)
+		}
+		// The single-mint invariant: the entity handed to the use case for
+		// persistence is the same grant the sid claims were signed with, so the
+		// stored row and the claim cannot diverge.
+		if resp.NewGrant == nil {
+			t.Fatal("NewGrant = nil, want the minted grant for the use case to persist")
+		}
+		if string(resp.NewGrant.ID) != jwtSvc.capturedGrantID {
+			t.Errorf("NewGrant.ID = %q, want same as the signed grantID = %q",
+				resp.NewGrant.ID, jwtSvc.capturedGrantID)
+		}
+		if resp.NewGrant.UserID != user.ID {
+			t.Errorf("NewGrant.UserID = %q, want %q", resp.NewGrant.UserID, user.ID)
+		}
+		if string(resp.NewGrant.ClientID) != "client-1" {
+			t.Errorf("NewGrant.ClientID = %q, want client-1", resp.NewGrant.ClientID)
 		}
 	})
 }

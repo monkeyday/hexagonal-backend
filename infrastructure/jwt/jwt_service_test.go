@@ -88,7 +88,7 @@ func TestParseJWT(t *testing.T) {
 		{
 			name: "generated access token — accepted with subject, scope and jti",
 			token: func(t *testing.T) string {
-				s, err := svc.GenAccessToken("user-1", "openid email", 3600)
+				s, err := svc.GenAccessToken("user-1", "openid email", "grant-1", 3600)
 				if err != nil {
 					t.Fatalf("GenAccessToken: %v", err)
 				}
@@ -98,7 +98,7 @@ func TestParseJWT(t *testing.T) {
 		{
 			name: "ID token presented as bearer — rejected",
 			token: func(t *testing.T) string {
-				s, err := svc.GenIDToken("user-1", "client-123", "a@b.io", "nonce", true, 3600)
+				s, err := svc.GenIDToken(IDTokenArgs{UserID: "user-1", ClientID: "client-123", Email: "a@b.io", Nonce: "nonce", EmailVerified: true, ExpireSecs: 3600})
 				if err != nil {
 					t.Fatalf("GenIDToken: %v", err)
 				}
@@ -182,7 +182,7 @@ func TestParseIDToken(t *testing.T) {
 	svc := newTestService(t)
 
 	t.Run("generated ID token — accepted", func(t *testing.T) {
-		s, err := svc.GenIDToken("user-1", "client-123", "a@b.io", "nonce-1", true, 3600)
+		s, err := svc.GenIDToken(IDTokenArgs{UserID: "user-1", ClientID: "client-123", Email: "a@b.io", Nonce: "nonce-1", EmailVerified: true, ExpireSecs: 3600})
 		if err != nil {
 			t.Fatalf("GenIDToken: %v", err)
 		}
@@ -196,12 +196,94 @@ func TestParseIDToken(t *testing.T) {
 	})
 
 	t.Run("access token presented as ID token — rejected", func(t *testing.T) {
-		s, err := svc.GenAccessToken("user-1", "openid", 3600)
+		s, err := svc.GenAccessToken("user-1", "openid", "", 3600)
 		if err != nil {
 			t.Fatalf("GenAccessToken: %v", err)
 		}
 		if _, err := svc.ParseIDToken(s); err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
+func TestSidClaim(t *testing.T) {
+	svc := newTestService(t)
+
+	t.Run("access token with grantID carries sid; ParseJWT round-trips to Claims.GrantID", func(t *testing.T) {
+		s, err := svc.GenAccessToken("user-1", "openid", "grant-abc", 3600)
+		if err != nil {
+			t.Fatalf("GenAccessToken: %v", err)
+		}
+		claims, err := svc.ParseJWT(s)
+		if err != nil {
+			t.Fatalf("ParseJWT: %v", err)
+		}
+		if claims.GrantID != "grant-abc" {
+			t.Errorf("GrantID = %q, want grant-abc", claims.GrantID)
+		}
+	})
+
+	t.Run("access token with empty grantID has no sid; ParseJWT leaves GrantID empty", func(t *testing.T) {
+		s, err := svc.GenAccessToken("user-1", "openid", "", 3600)
+		if err != nil {
+			t.Fatalf("GenAccessToken: %v", err)
+		}
+		claims, err := svc.ParseJWT(s)
+		if err != nil {
+			t.Fatalf("ParseJWT: %v", err)
+		}
+		if claims.GrantID != "" {
+			t.Errorf("GrantID = %q, want empty for token without sid", claims.GrantID)
+		}
+	})
+
+	t.Run("id_token with grantID carries sid", func(t *testing.T) {
+		s, err := svc.GenIDToken(IDTokenArgs{
+			UserID:        "user-1",
+			ClientID:      "client-1",
+			Email:         "a@b.io",
+			GrantID:       "grant-xyz",
+			EmailVerified: true,
+			ExpireSecs:    3600,
+		})
+		if err != nil {
+			t.Fatalf("GenIDToken: %v", err)
+		}
+		// Verify the sid claim is present by parsing the raw JWT payload
+		parts := strings.SplitN(s, ".", 3)
+		if len(parts) != 3 {
+			t.Fatalf("malformed JWT: %q", s)
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if !strings.Contains(string(payload), `"sid":"grant-xyz"`) {
+			t.Errorf("id_token payload missing sid claim: %s", payload)
+		}
+	})
+
+	t.Run("id_token with empty grantID has no sid", func(t *testing.T) {
+		s, err := svc.GenIDToken(IDTokenArgs{
+			UserID:        "user-1",
+			ClientID:      "client-1",
+			Email:         "a@b.io",
+			EmailVerified: true,
+			ExpireSecs:    3600,
+		})
+		if err != nil {
+			t.Fatalf("GenIDToken: %v", err)
+		}
+		parts := strings.SplitN(s, ".", 3)
+		if len(parts) != 3 {
+			t.Fatalf("malformed JWT: %q", s)
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if strings.Contains(string(payload), `"sid"`) {
+			t.Errorf("id_token payload must not contain sid when grantID is empty: %s", payload)
 		}
 	})
 }

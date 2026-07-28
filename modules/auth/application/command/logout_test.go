@@ -3,10 +3,10 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 	corejwt "sc/core/jwt"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
+	"slices"
 	"testing"
 	"time"
 )
@@ -48,7 +48,7 @@ func TestLogoutUseCase(t *testing.T) {
 			wantRedirect:                allowedURI,
 			wantTokensGone:              true,
 			wantCookieCleared:           true,
-			wantJTIBlacklisted:          fmt.Sprintf(define.BlacklistCacheKey, "jti-xyz"),
+			wantJTIBlacklisted:          define.BlacklistKey("jti-xyz"),
 		},
 		{
 			name:               "valid bearer token, no redirect URI — revokes, empty redirect",
@@ -56,7 +56,7 @@ func TestLogoutUseCase(t *testing.T) {
 			jwt:                &mockJwtService{parseClaims: validAccessClaims},
 			wantRedirect:       "",
 			wantTokensGone:     true,
-			wantJTIBlacklisted: fmt.Sprintf(define.BlacklistCacheKey, "jti-xyz"),
+			wantJTIBlacklisted: define.BlacklistKey("jti-xyz"),
 		},
 		{
 			name: "no credentials (cross-site GET shape) — nothing revoked, still redirects",
@@ -119,6 +119,7 @@ func TestLogoutUseCase(t *testing.T) {
 				UserRepo:                    newMockRepo(newTestUser()),
 				Cache:                       cache,
 				RefreshTokenRepo:            rtRepo,
+				GrantRepo:                   newMockGrantRepo(),
 				PostLogoutRedirectAllowlist: tc.postLogoutRedirectAllowlist,
 			}
 			uc := NewLogoutUseCase(deps)
@@ -193,6 +194,7 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 			UserRepo:         newMockRepo(newTestUser()),
 			Cache:            newMockCache(),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 		}
 		uc := NewLogoutUseCase(deps)
 
@@ -207,6 +209,202 @@ func TestLogoutUseCase_RevokesOnlyCallerTokens(t *testing.T) {
 			if rt.UserID == "user-2" && rt.RevokedAt != nil {
 				t.Error("expected user-2 refresh tokens to be untouched")
 			}
+		}
+	})
+
+	t.Run("bearer with sid — grant marker written in cache", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-sid-marker", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = grantID
+		cache := newMockCache()
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-sid",
+					GrantID:   string(grantID),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(rt),
+			GrantRepo:        newMockGrantRepo(),
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		markerKey := define.RevokedGrantKey(grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache after logout with sid, not found", markerKey)
+		}
+	})
+
+	t.Run("legacy bearer (no sid) — no grant marker written", func(t *testing.T) {
+		cache := newMockCache()
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-legacy-marker",
+					GrantID:   "", // no sid
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			GrantRepo:        newMockGrantRepo(),
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for key := range cache.items {
+			if len(key) > len("revoked_grant:") && key[:len("revoked_grant:")] == "revoked_grant:" {
+				t.Errorf("expected no grant marker for legacy bearer, but found key %q", key)
+			}
+		}
+	})
+
+	t.Run("bearer with sid — only that grant's tokens revoked, same-user other grant untouched", func(t *testing.T) {
+		grantA := entity.NewGrantID()
+		grantB := entity.NewGrantID()
+
+		rtGrantA := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-a", Scope: entity.MustParseScope("openid")})
+		rtGrantA.GrantID = grantA
+		rtGrantB := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-grant-b", Scope: entity.MustParseScope("openid")})
+		rtGrantB.GrantID = grantB
+		rtRepo := newMockRefreshTokenRepo(rtGrantA, rtGrantB)
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-a",
+					GrantID:   string(grantA),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
+		}
+		uc := NewLogoutUseCase(deps)
+
+		if _, err := uc.Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rtRepo.tokens[rtGrantA.TokenHash].RevokedAt == nil {
+			t.Error("grantA token should be revoked after logout with sid=grantA")
+		}
+		if rtRepo.tokens[rtGrantB.TokenHash].RevokedAt != nil {
+			t.Error("grantB token should be untouched — different session")
+		}
+	})
+
+	t.Run("legacy bearer (no sid) — all user tokens revoked", func(t *testing.T) {
+		rtA := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-a", Scope: entity.MustParseScope("openid")})
+		rtB := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-legacy-b", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(rtA, rtB)
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-legacy",
+					GrantID:   "", // no sid — legacy token
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
+		}
+		uc := NewLogoutUseCase(deps)
+
+		if _, err := uc.Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, rt := range rtRepo.tokens {
+			if rt.UserID == "user-1" && rt.RevokedAt == nil {
+				t.Error("legacy bearer must revoke all user tokens")
+			}
+		}
+	})
+
+	t.Run("bearer with sid — grant revoked before its rows are swept", func(t *testing.T) {
+		ops := &opsLog{}
+		grantID := entity.NewGrantID()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-ordered", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = grantID
+		rtRepo := newMockRefreshTokenRepo(rt)
+		grantRepo := newMockGrantRepo()
+		grant := entity.NewGrant("user-1", "")
+		grant.ID = grantID
+		if err := grantRepo.Save(ctx, grant); err != nil {
+			t.Fatalf("seeding grant: %v", err)
+		}
+		// Attached after seeding so the log covers only the call under test.
+		rtRepo.ops = ops
+		grantRepo.ops = ops
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-ordered",
+					GrantID:   string(grantID),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got := ops.all(); !slices.Equal(got, []string{"revoke_grant", "sweep_rows"}) {
+			t.Errorf("call order = %v, want [revoke_grant sweep_rows] — the durable record must be written before the non-atomic sweep", got)
+		}
+		if stored := grantRepo.grants[grantID]; stored == nil || stored.RevokedAt == nil {
+			t.Error("logout must revoke the grant itself, not only its rows")
+		}
+	})
+
+	t.Run("grant revoke fails — logout still succeeds and sweeps rows", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "rt-revoke-err", Scope: entity.MustParseScope("openid")})
+		rt.GrantID = grantID
+		rtRepo := newMockRefreshTokenRepo(rt)
+		grantRepo := newMockGrantRepo()
+		grantRepo.revokeErr = errors.New("db down")
+
+		deps := define.Dependencies{
+			JWTSvc: &mockJwtService{
+				parseClaims: &corejwt.Claims{
+					Subject:   "user-1",
+					ID:        "jti-revoke-err",
+					GrantID:   string(grantID),
+					ExpiresAt: new(time.Now().Add(time.Hour)),
+				},
+			},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+		}
+		if _, err := NewLogoutUseCase(deps).Execute(ctx, &LogoutCommand{AccessToken: new("bearer-token")}); err != nil {
+			t.Fatalf("logout must not fail because the grant record could not be written: %v", err)
+		}
+		if rtRepo.tokens[rt.TokenHash].RevokedAt == nil {
+			t.Error("row sweep must still run when the grant revoke fails")
 		}
 	})
 }

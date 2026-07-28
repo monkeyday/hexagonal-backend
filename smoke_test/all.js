@@ -128,6 +128,28 @@ export default function (tokens) {
       'has access_token':  (r) => !!r.json('access_token'),
       'has refresh_token': (r) => !!r.json('refresh_token'),
     });
+
+    // Replaying the token just consumed is treated as theft: the grant is
+    // revoked, which must take its already-issued access tokens with it.
+    const replay = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type: 'refresh_token', client_id: 'smoke-client',
+        refresh_token: fresh.refresh_token,
+      }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(400, 401) },
+    );
+    check(replay, {
+      'replayed refresh token: rejected 4xx': (r) => r.status === 400 || r.status === 401,
+    });
+
+    const afterReplay = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${fresh.access_token}` },
+      responseCallback: expectedStatuses(401),
+    });
+    check(afterReplay, {
+      'replay revokes the grant access token: status 401': (r) => r.status === 401,
+    });
   });
 
   // ── POST /token — authorization_code grant ───────────────────────────────────
@@ -222,17 +244,31 @@ export default function (tokens) {
     );
     check(revoke, { 'revoke: status 200': (r) => r.status === 200 });
 
+    // RFC 7009 §2.1: revoking a refresh token ends the whole grant, so the
+    // access token issued alongside it stops verifying as well.
+    const cascaded = http.get(`${BASE_URL}/oidc/me`, {
+      headers: rh,
+      responseCallback: expectedStatuses(401),
+    });
+    check(cascaded, {
+      'revoke cascades to the sibling access token: status 401': (r) => r.status === 401,
+    });
+
+    // That bearer died with its grant; the remaining calls need a live one.
+    const live = getTokens();
+    const lh = { ...JSON_HEADERS, Authorization: `Bearer ${live.access_token}` };
+
     const unknown = http.post(
       `${BASE_URL}/oidc/revoke`,
       JSON.stringify({ token: 'no-such-token' }),
-      { headers: rh },
+      { headers: lh },
     );
     check(unknown, { 'unknown token: status 200': (r) => r.status === 200 });
 
     const missing = http.post(
       `${BASE_URL}/oidc/revoke`,
       JSON.stringify({}),
-      { headers: rh, responseCallback: expectedStatuses(400) },
+      { headers: lh, responseCallback: expectedStatuses(400) },
     );
     check(missing, { 'missing token: status 400': (r) => r.status === 400 });
 
@@ -303,6 +339,83 @@ export default function (tokens) {
 
     const noRedirect = http.get(`${BASE_URL}/oidc/logout`, { redirects: 0 });
     check(noRedirect, { 'no redirect URI: status 200': (r) => r.status === 200 });
+
+    // Neither call above carried a bearer, so neither may have revoked anything:
+    // id_token_hint rides along on cross-site GET navigations (logout.go:53-63).
+    const survived = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${fresh.access_token}` },
+    });
+    check(survived, {
+      'bearer-less logout revokes nothing: status 200': (r) => r.status === 200,
+    });
+
+    // Both halves: a regression that swept the refresh rows without writing a
+    // grant marker would leave the access token above answering 200.
+    const survivedRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: fresh.refresh_token,
+      }),
+      { headers: JSON_HEADERS },
+    );
+    check(survivedRefresh, {
+      'bearer-less logout leaves the refresh token usable: status 200': (r) => r.status === 200,
+    });
+
+    // Logout revokes only for a caller presenting a bearer token, and only the
+    // session that token belongs to (grant-linkage.md §1). Two independent
+    // sessions: one is ended, the other must survive.
+    const ended = getTokens();
+    const kept  = getTokens();
+
+    const authed = http.get(
+      `${BASE_URL}/oidc/logout?post_logout_redirect_uri=${encodeURIComponent(POST_LOGOUT_URI)}`,
+      { redirects: 0, headers: { Authorization: `Bearer ${ended.access_token}` } },
+    );
+    check(authed, { 'authenticated logout: status 302': (r) => r.status === 302 });
+
+    const endedMe = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${ended.access_token}` },
+      responseCallback: expectedStatuses(401),
+    });
+    check(endedMe, { 'logout ends its own session: status 401': (r) => r.status === 401 });
+
+    const keptMe = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${kept.access_token}` },
+    });
+    check(keptMe, { 'logout leaves other sessions signed in: status 200': (r) => r.status === 200 });
+
+    // The assertion that actually distinguishes per-session from user-wide
+    // revocation: a regression to RevokeAllForUser would revoke *both* sessions'
+    // refresh tokens while leaving this access token valid until exp.
+    const keptRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: kept.refresh_token,
+      }),
+      { headers: JSON_HEADERS },
+    );
+    check(keptRefresh, {
+      'logout leaves the other session refreshable: status 200': (r) => r.status === 200,
+    });
+
+    // The whole grant goes, not just the access token's jti.
+    const endedRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: ended.refresh_token,
+      }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(400, 401) },
+    );
+    check(endedRefresh, {
+      'logout revokes its grant refresh token: 4xx': (r) => r.status === 400 || r.status === 401,
+    });
   });
 
   // ── POST /api/v3/update-profile ───────────────────────────────────────────────

@@ -10,6 +10,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -59,24 +60,28 @@ func TestExchangeCodeUseCase(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
-		cmd              *ExchangeCodeCommand
-		jwtSvc           *mockJwtService
-		userRepoOverride *mockUserRepo
-		rtRepoOverride   *mockRefreshTokenRepo
-		extraCodes       []*entity.AuthCode
-		wantErrCode      coreerror.ErrCode
-		wantAnyErr       bool
-		wantRTPersisted  bool
-		wantIDTokenNonce string
-		check            func(t *testing.T, resp *define.TokenResponse)
+		name               string
+		cmd                *ExchangeCodeCommand
+		jwtSvc             *mockJwtService
+		userRepoOverride   *mockUserRepo
+		rtRepoOverride     *mockRefreshTokenRepo
+		grantRepoOverride  *mockGrantRepo
+		extraCodes         []*entity.AuthCode
+		wantErrCode        coreerror.ErrCode
+		wantAnyErr         bool
+		wantNoRTPersisted  bool
+		wantRTPersisted    bool
+		wantGrantPersisted bool
+		wantIDTokenNonce   string
+		check              func(t *testing.T, resp *define.TokenResponse)
 	}{
 		{
-			name:             "valid code returns tokens",
-			cmd:              base,
-			jwtSvc:           &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
-			wantRTPersisted:  true,
-			wantIDTokenNonce: "nonce-abc",
+			name:               "valid code returns tokens",
+			cmd:                base,
+			jwtSvc:             &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
+			wantRTPersisted:    true,
+			wantGrantPersisted: true,
+			wantIDTokenNonce:   "nonce-abc",
 			check: func(t *testing.T, resp *define.TokenResponse) {
 				if resp.AccessToken == "" {
 					t.Error("access_token must not be empty")
@@ -346,6 +351,16 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			jwtSvc:      &mockJwtService{},
 			wantErrCode: autherrors.InvalidClient,
 		},
+		{
+			// A grant that cannot be stored must fail issuance rather than be
+			// swallowed, so later code may assume grant rows are complete.
+			name:              "grant store fails — issuance fails, no refresh token persisted",
+			cmd:               base,
+			jwtSvc:            &mockJwtService{accessToken: "new-access-token", refreshToken: "new-refresh-token"},
+			grantRepoOverride: &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant), saveErr: errors.New("db down")},
+			wantAnyErr:        true,
+			wantNoRTPersisted: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -358,6 +373,13 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			if rtRepo == nil {
 				rtRepo = newMockRefreshTokenRepo()
 			}
+			grantRepo := tc.grantRepoOverride
+			if grantRepo == nil {
+				grantRepo = newMockGrantRepo()
+			}
+			ops := &opsLog{}
+			rtRepo.ops = ops
+			grantRepo.ops = ops
 			mc := newMockCache().seed(fmt.Sprintf(define.AuthCodeCacheKey, "valid-code"), newValidCode())
 			for _, c := range tc.extraCodes {
 				mc.seed(fmt.Sprintf(define.AuthCodeCacheKey, c.Code), c)
@@ -367,6 +389,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				UserRepo:         userRepo,
 				Cache:            mc,
 				RefreshTokenRepo: rtRepo,
+				GrantRepo:        grantRepo,
 				ClientRegistry: newMockClientRegistry(
 					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
 					newTestClient(t, "basic-client", entity.ClientAuthSecretBasic),
@@ -390,6 +413,9 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected error, got nil")
 				}
+				if tc.wantNoRTPersisted && len(rtRepo.tokens) != 0 {
+					t.Errorf("refresh tokens persisted = %d, want 0 when issuance fails", len(rtRepo.tokens))
+				}
 				return
 			}
 			if err != nil {
@@ -406,6 +432,16 @@ func TestExchangeCodeUseCase(t *testing.T) {
 				}
 				if rt := rtRepo.tokens[rtHash]; rt != nil && rt.UserID != user.ID {
 					t.Errorf("RT.UserID = %q, want %q", rt.UserID, user.ID)
+				}
+			}
+			if tc.wantGrantPersisted {
+				if len(grantRepo.grants) == 0 {
+					t.Error("grant should be persisted in the repository")
+				}
+				// Grant first: a partial write then leaves an orphan grant, which
+				// is harmless, rather than a refresh token whose grant is missing.
+				if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+					t.Errorf("save order = %v, want [save_grant save_token]", got)
 				}
 			}
 			if tc.wantIDTokenNonce != "" {
@@ -435,6 +471,7 @@ func TestExchangeCodeOnlyOnce(t *testing.T) {
 		UserRepo:         newMockRepo(user),
 		Cache:            mc,
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	})
 
@@ -462,6 +499,7 @@ func TestExchangeCodeValidation(t *testing.T) {
 		UserRepo:         newMockRepo(newTestUser()),
 		Cache:            newMockCache(),
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		ClientRegistry:   newMockClientRegistry(newTestClient(t, "client-123", entity.ClientAuthSecretPost)),
 	}))
 

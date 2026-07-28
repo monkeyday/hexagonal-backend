@@ -25,23 +25,38 @@ func (m *mockJwtService) ParseJWT(_ string) (*corejwt.Claims, error) {
 
 // mockRevocationChecker implements RevocationChecker for auth middleware tests.
 type mockRevocationChecker struct {
-	revoked map[string]bool
-	err     error // if set, IsRevoked returns this error
+	revoked          map[string]bool // revoked JTIs
+	revokedGrants    map[string]bool // revoked grant IDs
+	invalidatedUsers map[string]bool // users whose sessions are invalidated (all tokens)
+	err              error           // if set, IsRevoked returns this error for any call
 }
 
 func newMockRevocationChecker(revokedJTIs ...string) *mockRevocationChecker {
-	m := &mockRevocationChecker{revoked: make(map[string]bool)}
+	m := &mockRevocationChecker{
+		revoked:          make(map[string]bool),
+		revokedGrants:    make(map[string]bool),
+		invalidatedUsers: make(map[string]bool),
+	}
 	for _, jti := range revokedJTIs {
 		m.revoked[jti] = true
 	}
 	return m
 }
 
-func (m *mockRevocationChecker) IsRevoked(_ context.Context, jti string) (bool, error) {
+func (m *mockRevocationChecker) IsRevoked(_ context.Context, claims *corejwt.Claims) (bool, error) {
 	if m.err != nil {
 		return false, m.err
 	}
-	return m.revoked[jti], nil
+	if m.revoked[claims.ID] {
+		return true, nil
+	}
+	if claims.GrantID != "" && m.revokedGrants[claims.GrantID] {
+		return true, nil
+	}
+	if m.invalidatedUsers[claims.Subject] {
+		return true, nil
+	}
+	return false, nil
 }
 
 func newExtractTokenRouter() *gin.Engine {
@@ -131,6 +146,7 @@ func newAuthRouter(svc TokenParser, rev *mockRevocationChecker) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{
 			"user_id":      c.GetString(UserIdKey),
 			"access_token": c.GetString(TokenKey),
+			"grant_id":     c.GetString(GrantIdKey),
 		})
 	})
 	return r
@@ -252,6 +268,57 @@ func TestAuthenticate(t *testing.T) {
 			wantStatus:  http.StatusUnauthorized,
 			wantErrCode: coreerror.Unauthorized,
 		},
+		{
+			name:       "token whose grant is revoked — 401 even though JTI is clean",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "clean-jti", GrantID: "revoked-grant",
+			}},
+			rev: &mockRevocationChecker{
+				revoked:       map[string]bool{},
+				revokedGrants: map[string]bool{"revoked-grant": true},
+			},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:       "legacy token (no sid) with clean jti — authenticates",
+			authHeader: "Bearer valid-token",
+			svc:        &mockJwtService{claims: &corejwt.Claims{Subject: "user-42", ID: "clean-jti-2"}},
+			rev:        newMockRevocationChecker(),
+			wantStatus: http.StatusOK,
+			wantUserID: "user-42",
+		},
+		{
+			name:       "cache error on grant check — fail-closed 401",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "jti-grant-err", GrantID: "some-grant",
+			}},
+			rev: &mockRevocationChecker{
+				revoked:          map[string]bool{},
+				revokedGrants:    map[string]bool{},
+				invalidatedUsers: map[string]bool{},
+				err:              errors.New("cache unavailable"),
+			},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
+		{
+			name:       "sessions invalidated for user — 401 even though JTI and grant are clean",
+			authHeader: "Bearer valid-token",
+			svc: &mockJwtService{claims: &corejwt.Claims{
+				Subject: "user-42", ID: "clean-jti-3", GrantID: "clean-grant",
+				IssuedAt: new(time.Now()),
+			}},
+			rev: &mockRevocationChecker{
+				revoked:          map[string]bool{},
+				revokedGrants:    map[string]bool{},
+				invalidatedUsers: map[string]bool{"user-42": true},
+			},
+			wantStatus:  http.StatusUnauthorized,
+			wantErrCode: coreerror.Unauthorized,
+		},
 	}
 
 	for _, tc := range tests {
@@ -280,4 +347,34 @@ func TestAuthenticate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthenticate_GrantIdKey(t *testing.T) {
+	t.Run("token with sid — GrantIdKey set in context", func(t *testing.T) {
+		claims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "jti-1", GrantID: "grant-abc"}
+		r := newAuthRouter(&mockJwtService{claims: claims}, newMockRevocationChecker())
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		assertBodyContains(t, w.Body.Bytes(), "grant-abc")
+	})
+
+	t.Run("token without sid (legacy) — authenticates, GrantIdKey empty", func(t *testing.T) {
+		claims := &corejwt.Claims{Subject: "user-42", Issuer: "test-issuer", ID: "jti-2"}
+		r := newAuthRouter(&mockJwtService{claims: claims}, newMockRevocationChecker())
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("legacy token without sid must still authenticate, got status %d", w.Code)
+		}
+		assertBodyContains(t, w.Body.Bytes(), `"grant_id":""`)
+	})
 }

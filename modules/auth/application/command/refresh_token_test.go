@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	coreerror "sc/core/error"
@@ -31,6 +32,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -73,16 +75,19 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		}
 	})
 
-	t.Run("rotation preserves AuthenticatedAt", func(t *testing.T) {
+	t.Run("rotation preserves AuthenticatedAt and GrantID", func(t *testing.T) {
 		rt := newValidRT()
 		originalAuthAt := rt.AuthenticatedAt
+		originalGrantID := rt.GrantID
+		jwtSvc := &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"}
 		rtRepo := newMockRefreshTokenRepo(rt)
 		mod := usecase.NewRegistry()
 		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
 			UoW:              &mockUoW{},
-			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			JWTSvc:           jwtSvc,
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -103,8 +108,55 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 		if !newRT.AuthenticatedAt.Equal(originalAuthAt) {
 			t.Errorf("AuthenticatedAt not preserved across rotation: got %v, want %v", newRT.AuthenticatedAt, originalAuthAt)
 		}
+		if newRT.GrantID != originalGrantID {
+			t.Errorf("GrantID not preserved across rotation: got %q, want %q", newRT.GrantID, originalGrantID)
+		}
+		// sid/grant handed to issuance equals the original refresh token's GrantID
+		if jwtSvc.capturedAccessGrantID != string(originalGrantID) {
+			t.Errorf("sid passed to GenAccessToken = %q, want %q", jwtSvc.capturedAccessGrantID, originalGrantID)
+		}
 		if newRT.Scope.String() != rt.Scope.String() {
 			t.Errorf("Scope not preserved across rotation: got %q, want %q", newRT.Scope.String(), rt.Scope.String())
+		}
+	})
+
+	t.Run("legacy token with empty GrantID — rotated token gets a fresh non-empty grant matching issuance", func(t *testing.T) {
+		// Simulate a refresh token stored before grant linkage landed (GrantID == "").
+		rt := newValidRT()
+		rt.GrantID = "" // legacy token
+		jwtSvc := &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"}
+		rtRepo := newMockRefreshTokenRepo(rt)
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           jwtSvc,
+			UserRepo:         newMockRepo(user),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+
+		resp, err := mod.Dispatch(ctx, &RefreshTokenCommand{
+			GrantType:    "refresh_token",
+			ClientID:     "APP_ID",
+			RefreshToken: "valid-refresh-token",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		newHash := entity.Hash(resp.(*define.TokenResponse).RefreshToken)
+		newRT := rtRepo.tokens[newHash]
+		if newRT == nil {
+			t.Fatal("new refresh token not found in repo")
+		}
+		if newRT.GrantID == "" {
+			t.Error("rotated token from a legacy (empty GrantID) original must have a non-empty GrantID")
+		}
+		// The grant used for issuance (captured by the mock) must equal the rotated token's GrantID
+		if string(newRT.GrantID) != jwtSvc.capturedAccessGrantID {
+			t.Errorf("rotated GrantID = %q, want same as issuance grantID = %q",
+				newRT.GrantID, jwtSvc.capturedAccessGrantID)
 		}
 	})
 
@@ -119,6 +171,7 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(user),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 
@@ -143,6 +196,180 @@ func TestRefreshTokenUseCase_Atomicity(t *testing.T) {
 	})
 }
 
+// TestRefreshTokenUseCase_GrantCheck covers the grant check inside the rotation
+// transaction (grant-linkage.md §10, PR8): a dead grant stops the chain, and a
+// live one has its expiry pushed out so it outlives the token just issued.
+func TestRefreshTokenUseCase_GrantCheck(t *testing.T) {
+	ctx := context.Background()
+	user := newTestUser()
+
+	// setup returns a use case whose refresh token belongs to grant, plus the
+	// repos so the test can inspect what the rotation did. A nil grant leaves
+	// the grant repo empty, which is the legacy (pre-linkage) chain.
+	setup := func(t *testing.T, grant *entity.Grant) (*usecase.Registry, *mockRefreshTokenRepo, *mockGrantRepo, *entity.RefreshToken) {
+		t.Helper()
+		rt := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "valid-refresh-token", Scope: entity.MustParseScope("openid")})
+		grantRepo := newMockGrantRepo()
+		if grant != nil {
+			grant.ID = rt.GrantID
+			if err := grantRepo.Save(ctx, grant); err != nil {
+				t.Fatalf("seeding grant: %v", err)
+			}
+		}
+		rtRepo := newMockRefreshTokenRepo(rt)
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &transactionalMockUoW{rtRepo: rtRepo},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(user),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		return mod, rtRepo, grantRepo, rt
+	}
+
+	dispatch := func(mod *usecase.Registry) (any, error) {
+		return mod.Dispatch(ctx, &RefreshTokenCommand{
+			GrantType:    "refresh_token",
+			ClientID:     "APP_ID",
+			RefreshToken: "valid-refresh-token",
+		})
+	}
+
+	t.Run("revoked grant — rotation rejected, old token left unrevoked", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.RevokedAt = new(time.Now())
+		mod, rtRepo, _, rt := setup(t, grant)
+
+		_, err := dispatch(mod)
+		if err == nil {
+			t.Fatal("expected rotation to be rejected on a revoked grant, got nil error")
+		}
+		e, ok := err.(interface{ Code() coreerror.ErrCode })
+		if !ok || e.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("error = %v, want InvalidRefreshToken", err)
+		}
+		if stored := rtRepo.tokens[rt.TokenHash]; stored == nil || stored.RevokedAt != nil {
+			t.Error("old refresh token must be left unrevoked when the grant check rejects the rotation")
+		}
+		if len(rtRepo.tokens) != 1 {
+			t.Errorf("expected no new token persisted, got %d tokens", len(rtRepo.tokens))
+		}
+	})
+
+	t.Run("expired grant — rotation rejected", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.ExpiresAt = time.Now().Add(-time.Minute)
+		mod, _, _, _ := setup(t, grant)
+
+		_, err := dispatch(mod)
+		if err == nil {
+			t.Fatal("expected rotation to be rejected on an expired grant, got nil error")
+		}
+		e, ok := err.(interface{ Code() coreerror.ErrCode })
+		if !ok || e.Code() != autherrors.InvalidRefreshToken {
+			t.Fatalf("error = %v, want InvalidRefreshToken", err)
+		}
+	})
+
+	t.Run("missing grant (pre-linkage chain) — rotation succeeds, fails open", func(t *testing.T) {
+		mod, _, grantRepo, _ := setup(t, nil)
+
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("rotation must fail open when the grant is absent: %v", err)
+		}
+		if len(grantRepo.grants) != 0 {
+			t.Errorf("expected no grant to be created by the check, got %d", len(grantRepo.grants))
+		}
+	})
+
+	// assertGrantOutlives is the assertion the whole extension mechanism exists
+	// for. Checking the grant against now+TTL instead would pass even when the
+	// grant expires first, which is precisely the failure it must catch.
+	assertGrantOutlives := func(t *testing.T, grant *entity.Grant, newRT *entity.RefreshToken) {
+		t.Helper()
+		if !grant.ExpiresAt.After(newRT.ExpiresAt) {
+			t.Errorf("grant ExpiresAt = %v, want strictly after the rotated token's %v",
+				grant.ExpiresAt, newRT.ExpiresAt)
+		}
+	}
+
+	rotatedToken := func(t *testing.T, rtRepo *mockRefreshTokenRepo) *entity.RefreshToken {
+		t.Helper()
+		newRT := rtRepo.tokens[entity.Hash("new-refresh")]
+		if newRT == nil {
+			t.Fatal("rotated refresh token not persisted")
+		}
+		return newRT
+	}
+
+	t.Run("active grant — ExpiresAt extended past the token just issued", func(t *testing.T) {
+		grant := entity.NewGrant("user-1", "")
+		grant.ExpiresAt = time.Now().Add(time.Hour) // close to collection
+		mod, rtRepo, grantRepo, rt := setup(t, grant)
+
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		stored := grantRepo.grants[rt.GrantID]
+		if stored == nil {
+			t.Fatal("grant not found after rotation")
+		}
+		assertGrantOutlives(t, stored, rotatedToken(t, rtRepo))
+	})
+
+	// A grant that cannot be stored must fail issuance rather than be swallowed,
+	// so later code may assume grant rows are complete.
+	t.Run("grant store fails — rotation fails, nothing persisted", func(t *testing.T) {
+		mod, rtRepo, grantRepo, rt := setup(t, nil)
+		rt.GrantID = "" // legacy row: this rotation mints and saves a grant
+		grantRepo.saveErr = errors.New("db down")
+
+		if _, err := dispatch(mod); err == nil {
+			t.Fatal("a grant-store failure must fail the rotation, not be swallowed")
+		}
+		if rtRepo.tokens[entity.Hash("new-refresh")] != nil {
+			t.Error("no refresh token may be persisted when its grant could not be saved")
+		}
+		if stored := rtRepo.tokens[rt.TokenHash]; stored == nil || stored.RevokedAt != nil {
+			t.Error("the presented token must be left unrevoked when the rotation fails")
+		}
+	})
+
+	// The legacy first rotation mints its grant outside the transaction, so it
+	// is the one issuing path where the grant is written before the transaction
+	// that saves the token it covers.
+	t.Run("legacy chain joining a fresh grant — the new grant covers the new token", func(t *testing.T) {
+		mod, rtRepo, grantRepo, rt := setup(t, nil)
+		rt.GrantID = "" // pre-linkage row: carries no grant of its own
+		ops := &opsLog{}
+		rtRepo.ops = ops
+		grantRepo.ops = ops
+
+		if _, err := dispatch(mod); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Grant first here too, even though this grant is written outside the
+		// rotation transaction: a partial write must not leave a token whose
+		// grant is missing.
+		if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+			t.Errorf("save order = %v, want [save_grant save_token]", got)
+		}
+		newRT := rotatedToken(t, rtRepo)
+		if len(grantRepo.grants) != 1 {
+			t.Fatalf("expected exactly one freshly minted grant, got %d", len(grantRepo.grants))
+		}
+		stored := grantRepo.grants[newRT.GrantID]
+		if stored == nil {
+			t.Fatalf("the rotated token's grant %q was not persisted", newRT.GrantID)
+		}
+		assertGrantOutlives(t, stored, newRT)
+	})
+}
+
 func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 	ctx := context.Background()
 
@@ -153,6 +380,7 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(newTestUser()),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		return mod
@@ -172,21 +400,96 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 		}
 	}
 
-	t.Run("replayed revoked token — entire family revoked", func(t *testing.T) {
+	t.Run("replayed revoked token — only that grant's tokens revoked, other grant untouched", func(t *testing.T) {
+		stolenGrant := entity.NewGrantID()
+		otherGrant := entity.NewGrantID()
+
 		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = stolenGrant
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		sameGrantSibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "same-grant-sibling", Scope: entity.MustParseScope("openid")})
+		sameGrantSibling.GrantID = stolenGrant
+		otherGrantToken := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "other-grant-token", Scope: entity.MustParseScope("openid")})
+		otherGrantToken.GrantID = otherGrant
+		otherUser := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
+		rtRepo := newMockRefreshTokenRepo(stolen, sameGrantSibling, otherGrantToken, otherUser)
+
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if rtRepo.tokens[entity.Hash("same-grant-sibling")].RevokedAt == nil {
+			t.Error("replay must revoke all tokens in the same grant")
+		}
+		if rtRepo.tokens[entity.Hash("other-grant-token")].RevokedAt != nil {
+			t.Error("replay must not touch the same user's other grant")
+		}
+		if rtRepo.tokens[entity.Hash("other-user-token")].RevokedAt != nil {
+			t.Error("replay must not touch other users' tokens")
+		}
+	})
+
+	t.Run("replayed legacy token (empty GrantID) — entire user family revoked", func(t *testing.T) {
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-legacy-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = "" // legacy: no grant ID
 		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
 		sibling := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "sibling-token", Scope: entity.MustParseScope("openid")})
 		otherUser := entity.NewRefreshToken("user-2", "", &entity.IssuedTokens{RefreshToken: "other-user-token", Scope: entity.MustParseScope("openid")})
 		rtRepo := newMockRefreshTokenRepo(stolen, sibling, otherUser)
 
-		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-token"))
+		_, err := newUseCase(rtRepo).Dispatch(ctx, cmdFor("stolen-legacy-token"))
 		assertErrCode(t, err, autherrors.InvalidRefreshToken)
 
 		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt == nil {
-			t.Error("replay must revoke the user's entire token family")
+			t.Error("legacy replay must revoke the user's entire token family")
 		}
 		if rtRepo.tokens[entity.Hash("other-user-token")].RevokedAt != nil {
-			t.Error("replay must not touch other users' tokens")
+			t.Error("legacy replay must not touch other users' tokens")
+		}
+	})
+
+	t.Run("replayed token with GrantID — grant marker written in cache", func(t *testing.T) {
+		grantID := entity.NewGrantID()
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-grant-token", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = grantID
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			GrantRepo:        newMockGrantRepo(),
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-grant-token"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+		markerKey := define.RevokedGrantKey(grantID)
+		if _, ok := cache.items[markerKey]; !ok {
+			t.Errorf("expected grant revocation marker %q in cache after replay, not found", markerKey)
+		}
+	})
+
+	t.Run("replayed legacy token (empty GrantID) — no grant marker written", func(t *testing.T) {
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-legacy-marker", Scope: entity.MustParseScope("openid")})
+		stolen.GrantID = ""
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		cache := newMockCache()
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            cache,
+			RefreshTokenRepo: newMockRefreshTokenRepo(stolen),
+			GrantRepo:        newMockGrantRepo(),
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-legacy-marker"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+		if len(cache.items) != 0 {
+			t.Errorf("expected no cache entries for legacy replay, got %d: %v", len(cache.items), cache.items)
 		}
 	})
 
@@ -215,6 +518,42 @@ func TestRefreshTokenUseCase_ReuseDetection(t *testing.T) {
 
 		if rtRepo.tokens[entity.Hash("sibling-token")].RevokedAt != nil {
 			t.Error("losing a rotation race is not a replay; family must stay intact")
+		}
+	})
+
+	t.Run("replay revokes the grant before sweeping its rows", func(t *testing.T) {
+		ops := &opsLog{}
+		stolen := entity.NewRefreshToken("user-1", "", &entity.IssuedTokens{RefreshToken: "stolen-ordered", Scope: entity.MustParseScope("openid")})
+		stolen.RevokedAt = new(time.Now().Add(-time.Minute))
+		rtRepo := newMockRefreshTokenRepo(stolen)
+		grantRepo := newMockGrantRepo()
+		grant := entity.NewGrant("user-1", "")
+		grant.ID = stolen.GrantID
+		if err := grantRepo.Save(ctx, grant); err != nil {
+			t.Fatalf("seeding grant: %v", err)
+		}
+		// Attached after seeding so the log covers only the call under test.
+		rtRepo.ops = ops
+		grantRepo.ops = ops
+
+		mod := usecase.NewRegistry()
+		mod.Register(RefreshTokenCommand{}, NewRefreshTokenUseCase(define.Dependencies{
+			UoW:              &mockUoW{},
+			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
+			UserRepo:         newMockRepo(newTestUser()),
+			Cache:            newMockCache(),
+			RefreshTokenRepo: rtRepo,
+			GrantRepo:        grantRepo,
+			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
+		}))
+		_, err := mod.Dispatch(ctx, cmdFor("stolen-ordered"))
+		assertErrCode(t, err, autherrors.InvalidRefreshToken)
+
+		if got := ops.all(); !slices.Equal(got, []string{"revoke_grant", "sweep_rows"}) {
+			t.Errorf("call order = %v, want [revoke_grant sweep_rows] — the durable record must be written before the non-atomic sweep", got)
+		}
+		if stored := grantRepo.grants[stolen.GrantID]; stored == nil || stored.RevokedAt == nil {
+			t.Error("replay must revoke the grant itself, not only its rows")
 		}
 	})
 }
@@ -522,6 +861,7 @@ func TestRefreshTokenUseCase(t *testing.T) {
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
+				GrantRepo:        newMockGrantRepo(),
 				ClientRegistry: newMockClientRegistry(
 					newTestClient(t, "APP_ID", entity.ClientAuthNone),
 					newTestClient(t, "client-123", entity.ClientAuthSecretPost),
@@ -597,6 +937,7 @@ func TestRefreshTokenUseCase_UoWError(t *testing.T) {
 			JWTSvc:           &mockJwtService{accessToken: "new-access", refreshToken: "new-refresh"},
 			UserRepo:         newMockRepo(newTestUser()),
 			RefreshTokenRepo: rtRepo,
+			GrantRepo:        newMockGrantRepo(),
 			ClientRegistry:   newMockClientRegistry(newTestClient(t, "APP_ID", entity.ClientAuthNone)),
 		}))
 		return mod

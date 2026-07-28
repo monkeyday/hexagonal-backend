@@ -15,11 +15,16 @@ type IssuedTokens struct {
 	RefreshToken string
 	IDToken      string
 	Scope        Scope
+	GrantID      GrantID
+	// NewGrant is non-nil only for a new authentication event; on rotation the
+	// grant already exists and is carried forward. The use case persists it.
+	NewGrant *Grant
 }
 type RefreshToken struct {
 	ID              string
 	UserID          UserID
 	ClientID        ClientID // client the token was issued to; empty when the grant had no authenticated client (password grant)
+	GrantID         GrantID
 	TokenHash       string
 	Scope           Scope
 	DeviceID        string
@@ -31,10 +36,18 @@ type RefreshToken struct {
 
 func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *RefreshToken {
 	now := time.Now()
+	// Normal birthplace of a grant is IssueTokens (token_issuance.go); this
+	// fallback keeps the invariant "a RefreshToken always has a grant" for
+	// callers that construct IssuedTokens directly (e.g. test fixtures).
+	grantID := tokens.GrantID
+	if grantID == "" {
+		grantID = NewGrantID()
+	}
 	return &RefreshToken{
 		ID:              uuid.NewString(),
 		UserID:          userID,
 		ClientID:        clientID,
+		GrantID:         grantID,
 		TokenHash:       Hash(tokens.RefreshToken),
 		Scope:           tokens.Scope,
 		AuthenticatedAt: now,
@@ -45,10 +58,14 @@ func NewRefreshToken(userID UserID, clientID ClientID, tokens *IssuedTokens) *Re
 
 // Rotate creates a new RefreshToken for token rotation, carrying forward the stable
 // ClientID, AuthenticatedAt and DeviceID from the original authentication event.
+// The grant is carried forward from the rotated token.
 func (rt *RefreshToken) Rotate(userID UserID, tokens *IssuedTokens) *RefreshToken {
 	n := NewRefreshToken(userID, rt.ClientID, tokens)
 	n.AuthenticatedAt = rt.AuthenticatedAt
 	n.DeviceID = rt.DeviceID
+	if rt.GrantID != "" {
+		n.GrantID = rt.GrantID
+	}
 	return n
 }
 

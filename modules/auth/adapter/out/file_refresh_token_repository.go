@@ -19,6 +19,7 @@ type refreshTokenDoc struct {
 	ID              string     `json:"id"               bson:"_id"`
 	UserID          string     `json:"user_id"          bson:"user_id"`
 	ClientID        string     `json:"client_id"        bson:"client_id"`
+	GrantID         string     `json:"grant_id"         bson:"grant_id"`
 	TokenHash       string     `json:"token_hash"       bson:"token_hash"`
 	Scope           string     `json:"scope"            bson:"scope"` // stored as a space-separated string
 	DeviceID        string     `json:"device_id"        bson:"device_id"`
@@ -33,6 +34,7 @@ func rtToDoc(rt *entity.RefreshToken) *refreshTokenDoc {
 		ID:              rt.ID,
 		UserID:          string(rt.UserID),
 		ClientID:        string(rt.ClientID),
+		GrantID:         string(rt.GrantID),
 		TokenHash:       rt.TokenHash,
 		Scope:           rt.Scope.String(),
 		DeviceID:        rt.DeviceID,
@@ -52,6 +54,7 @@ func rtToEntity(d *refreshTokenDoc) (*entity.RefreshToken, error) {
 		ID:              d.ID,
 		UserID:          entity.UserID(d.UserID),
 		ClientID:        entity.ClientID(d.ClientID),
+		GrantID:         entity.GrantID(d.GrantID),
 		TokenHash:       d.TokenHash,
 		Scope:           scope,
 		DeviceID:        d.DeviceID,
@@ -99,6 +102,16 @@ func (r *FileRefreshTokenRepository) RevokeByTokenHash(_ context.Context, tokenH
 func (r *FileRefreshTokenRepository) RevokeAllForUser(_ context.Context, userID entity.UserID) error {
 	return r.repo.UpdateAll(func(rt *entity.RefreshToken) (bool, error) {
 		if rt.UserID == userID && rt.RevokedAt == nil {
+			rt.RevokedAt = new(time.Now())
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func (r *FileRefreshTokenRepository) RevokeAllForGrant(_ context.Context, grantID entity.GrantID) error {
+	return r.repo.UpdateAll(func(rt *entity.RefreshToken) (bool, error) {
+		if rt.GrantID == grantID && rt.RevokedAt == nil {
 			rt.RevokedAt = new(time.Now())
 			return true, nil
 		}

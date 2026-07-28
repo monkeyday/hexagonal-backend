@@ -8,6 +8,7 @@ import (
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
 	autherrors "sc/modules/auth/errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ func TestGetTokenUseCase(t *testing.T) {
 		jwt              *mockJwtService
 		repo             *mockUserRepo
 		rtRepo           *mockRefreshTokenRepo
+		grantRepo        *mockGrantRepo
 		wantErrCode      coreerror.ErrCode
+		wantNoRTPersist  bool
 		wantToken        string
 		wantScope        string
 		wantExpires      int
@@ -139,6 +142,18 @@ func TestGetTokenUseCase(t *testing.T) {
 			wantErrCode: autherrors.GenTokenFailed,
 		},
 		{
+			// A grant that cannot be stored must fail issuance rather than be
+			// swallowed, so later code may assume grant rows are complete.
+			name:            "grant store fails — GenTokenFailed, no refresh token persisted",
+			cmd:             &GetTokenQuery{Email: "test@example.com", Password: "Password1!"},
+			jwt:             &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
+			repo:            newMockRepo(newTestUserWithValidPassword()),
+			rtRepo:          newMockRefreshTokenRepo(),
+			grantRepo:       &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant), saveErr: errors.New("db error")},
+			wantErrCode:     autherrors.GenTokenFailed,
+			wantNoRTPersist: true,
+		},
+		{
 			name:             "explicit scope without openid — id_token omitted",
 			cmd:              &GetTokenQuery{Email: "test@example.com", Password: "Password1!", Scope: new("email profile")},
 			jwt:              &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
@@ -152,11 +167,19 @@ func TestGetTokenUseCase(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			ops := &opsLog{}
+			grantRepo := tc.grantRepo
+			if grantRepo == nil {
+				grantRepo = newMockGrantRepo()
+			}
+			grantRepo.ops = ops
+			tc.rtRepo.ops = ops
 			mod := usecase.NewRegistry()
 			mod.Register(GetTokenQuery{}, NewGetTokenUseCase(define.Dependencies{
 				JWTSvc:           tc.jwt,
 				UserRepo:         tc.repo,
 				RefreshTokenRepo: tc.rtRepo,
+				GrantRepo:        grantRepo,
 				ScopeAllowlist:   defaultAllowlist,
 			}))
 			result, err := mod.Dispatch(ctx, tc.cmd)
@@ -167,6 +190,9 @@ func TestGetTokenUseCase(t *testing.T) {
 				}
 				if e, ok := err.(interface{ Code() coreerror.ErrCode }); !ok || e.Code() != tc.wantErrCode {
 					t.Fatalf("got err_code %v, want %d", err, tc.wantErrCode)
+				}
+				if tc.wantNoRTPersist && len(tc.rtRepo.tokens) != 0 {
+					t.Errorf("refresh tokens persisted = %d, want 0 when issuance fails", len(tc.rtRepo.tokens))
 				}
 				return
 			}
@@ -205,6 +231,17 @@ func TestGetTokenUseCase(t *testing.T) {
 			if tc.rtRepo.tokens[rtHash] == nil {
 				t.Error("refresh token should be persisted in the repository")
 			}
+			// Grant first: a partial write then leaves an orphan grant, which is
+			// harmless, rather than a refresh token whose grant is missing.
+			if got := ops.all(); !slices.Equal(got, []string{"save_grant", "save_token"}) {
+				t.Errorf("save order = %v, want [save_grant save_token]", got)
+			}
+			if stored := grantRepo.grants[tc.rtRepo.tokens[rtHash].GrantID]; stored != nil {
+				if !stored.ExpiresAt.After(tc.rtRepo.tokens[rtHash].ExpiresAt) {
+					t.Errorf("grant ExpiresAt = %v, want strictly after the token's %v",
+						stored.ExpiresAt, tc.rtRepo.tokens[rtHash].ExpiresAt)
+				}
+			}
 			if tc.jwt.capturedAccessUserID != "user-1" {
 				t.Errorf("capturedAccessUserID = %q, want user-1", tc.jwt.capturedAccessUserID)
 			}
@@ -220,6 +257,7 @@ func TestGetToken_AccountLockout(t *testing.T) {
 		uc := NewGetTokenUseCase(define.Dependencies{
 			UserRepo:         repo,
 			RefreshTokenRepo: newMockRefreshTokenRepo(),
+			GrantRepo:        newMockGrantRepo(),
 			JWTSvc:           &mockJwtService{accessToken: "at", refreshToken: "rt"},
 			ScopeAllowlist:   []string{"openid"},
 		})
@@ -284,6 +322,7 @@ func TestGetToken_RehashOnLogin(t *testing.T) {
 	uc := NewGetTokenUseCase(define.Dependencies{
 		UserRepo:         repo,
 		RefreshTokenRepo: newMockRefreshTokenRepo(),
+		GrantRepo:        newMockGrantRepo(),
 		JWTSvc:           &mockJwtService{accessToken: "tok-access", refreshToken: "tok-refresh"},
 		ScopeAllowlist:   []string{"openid"},
 	})

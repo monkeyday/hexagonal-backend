@@ -10,13 +10,14 @@ type IDTokenArgs struct {
 	ClientID      string
 	Email         string
 	Nonce         string
+	GrantID       string
 	EmailVerified bool
 	ExpireSecs    int
 }
 
 // TokenIssuer generates access, refresh, and ID tokens.
 type TokenIssuer interface {
-	GenAccessToken(userID, scope string, expireSecs int) (string, error)
+	GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error)
 	GenRefreshToken(userID string) (string, error)
 	GenIDToken(args IDTokenArgs) (string, error)
 }

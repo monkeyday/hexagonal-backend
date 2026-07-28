@@ -7,6 +7,7 @@ import (
 	corejwt "sc/core/jwt"
 	"sc/modules/auth/domain/entity"
 	"sc/modules/auth/port"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -28,12 +29,14 @@ type mockJwtService struct {
 	// captured call arguments
 	capturedAccessUserID     string
 	capturedAccessScope      string
+	capturedAccessGrantID    string
 	capturedAccessExpireSecs int
 }
 
-func (m *mockJwtService) GenAccessToken(userID, scope string, expireSecs int) (string, error) {
+func (m *mockJwtService) GenAccessToken(userID, scope, grantID string, expireSecs int) (string, error) {
 	m.capturedAccessUserID = userID
 	m.capturedAccessScope = scope
+	m.capturedAccessGrantID = grantID
 	m.capturedAccessExpireSecs = expireSecs
 	return m.accessToken, m.accessErr
 }
@@ -197,9 +200,33 @@ func (m *mockCache) IncrWindow(_ context.Context, _ string, _ time.Duration) (in
 
 // ── mock RefreshTokenRepository ───────────────────────────────────────────────
 
+// opsLog records the order in which mock repositories were called, so a test can
+// assert that a grant is persisted before the refresh token it covers. The
+// command package has its own copy: test helpers do not cross package lines.
+type opsLog struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (l *opsLog) record(op string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ops = append(l.ops, op)
+}
+
+func (l *opsLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.ops)
+}
+
 type mockRefreshTokenRepo struct {
 	tokens  map[string]*entity.RefreshToken
 	saveErr error
+	ops     *opsLog
 }
 
 func newMockRefreshTokenRepo(tokens ...*entity.RefreshToken) *mockRefreshTokenRepo {
@@ -211,6 +238,7 @@ func newMockRefreshTokenRepo(tokens ...*entity.RefreshToken) *mockRefreshTokenRe
 }
 
 func (m *mockRefreshTokenRepo) Save(_ context.Context, rt *entity.RefreshToken) error {
+	m.ops.record("save_token")
 	if m.saveErr != nil {
 		return m.saveErr
 	}
@@ -238,6 +266,61 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(_ context.Context, userID entity
 			rt.RevokedAt = new(time.Now())
 		}
 	}
+	return nil
+}
+
+func (m *mockRefreshTokenRepo) RevokeAllForGrant(_ context.Context, grantID entity.GrantID) error {
+	for _, rt := range m.tokens {
+		if rt.GrantID == grantID {
+			rt.RevokedAt = new(time.Now())
+		}
+	}
+	return nil
+}
+
+// ── mock GrantRepository ─────────────────────────────────────────────────────
+
+type mockGrantRepo struct {
+	mu      sync.Mutex
+	grants  map[entity.GrantID]*entity.Grant
+	saveErr error
+	ops     *opsLog
+}
+
+func newMockGrantRepo() *mockGrantRepo {
+	return &mockGrantRepo{grants: make(map[entity.GrantID]*entity.Grant)}
+}
+
+func (m *mockGrantRepo) Save(_ context.Context, g *entity.Grant) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ops.record("save_grant")
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	cp := *g
+	m.grants[g.ID] = &cp
+	return nil
+}
+
+func (m *mockGrantRepo) FindByID(_ context.Context, grantID entity.GrantID) (*entity.Grant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if g, ok := m.grants[grantID]; ok {
+		cp := *g
+		return &cp, nil
+	}
+	return nil, coreerror.ErrNotFound
+}
+
+func (m *mockGrantRepo) Revoke(_ context.Context, grantID entity.GrantID, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.grants[grantID]
+	if !ok || g.RevokedAt != nil {
+		return coreerror.ErrNotFound
+	}
+	g.RevokedAt = &at
 	return nil
 }
 
