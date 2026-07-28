@@ -695,6 +695,16 @@ paths:
       description: |
         Invalidates an access or refresh token. Unknown tokens are silently
         accepted per RFC 7009 §2.2.
+
+        Revoking a **refresh token** ends the entire grant it belongs to, per
+        RFC 7009 §2.1: every refresh token in that session's chain is revoked,
+        and the access tokens already issued under it stop verifying. A token
+        that was already revoked repeats the cascade rather than returning
+        early, so the call is safe to retry after a failed attempt.
+
+        Revoking an **access token** blacklists that token's `jti` only, leaving
+        the rest of the session usable. An expired refresh token is accepted
+        silently and revokes nothing.
       tags: [OIDC]
       security:
         - BearerAuth: []
@@ -756,8 +766,15 @@ paths:
     get:
       summary: End session (OIDC Session Management)
       description: |
-        Revokes the user's tokens (best-effort, identified by `id_token_hint`)
-        and redirects to `post_logout_redirect_uri`.
+        Ends the caller's session and redirects to `post_logout_redirect_uri`.
+
+        Revocation happens only for a caller presenting a valid **bearer access
+        token**, and is scoped to the **single session** that token belongs to
+        (the grant in its `sid` claim) — other sessions, on other devices, stay
+        signed in. `id_token_hint` and the refresh cookie never trigger
+        revocation on their own: both ride along on cross-site GET navigations,
+        which would let an attacker log a victim out. Revocation is best-effort;
+        a failure to revoke does not prevent the redirect.
       tags: [OIDC]
       parameters:
         - name: id_token_hint
@@ -981,8 +998,9 @@ paths:
     post:
       summary: Reset password using a token
       description: |
-        Validates the raw reset token, updates the password, and revokes all
-        existing refresh tokens for the user.
+        Validates the raw reset token, updates the password, and ends every
+        session the user holds: all existing refresh tokens are revoked, and
+        access tokens issued before the reset stop verifying.
       tags: [Account]
       requestBody:
         required: true

@@ -222,17 +222,31 @@ export default function (tokens) {
     );
     check(revoke, { 'revoke: status 200': (r) => r.status === 200 });
 
+    // RFC 7009 §2.1: revoking a refresh token ends the whole grant, so the
+    // access token issued alongside it stops verifying as well.
+    const cascaded = http.get(`${BASE_URL}/oidc/me`, {
+      headers: rh,
+      responseCallback: expectedStatuses(401),
+    });
+    check(cascaded, {
+      'revoke cascades to the sibling access token: status 401': (r) => r.status === 401,
+    });
+
+    // That bearer died with its grant; the remaining calls need a live one.
+    const live = getTokens();
+    const lh = { ...JSON_HEADERS, Authorization: `Bearer ${live.access_token}` };
+
     const unknown = http.post(
       `${BASE_URL}/oidc/revoke`,
       JSON.stringify({ token: 'no-such-token' }),
-      { headers: rh },
+      { headers: lh },
     );
     check(unknown, { 'unknown token: status 200': (r) => r.status === 200 });
 
     const missing = http.post(
       `${BASE_URL}/oidc/revoke`,
       JSON.stringify({}),
-      { headers: rh, responseCallback: expectedStatuses(400) },
+      { headers: lh, responseCallback: expectedStatuses(400) },
     );
     check(missing, { 'missing token: status 400': (r) => r.status === 400 });
 
