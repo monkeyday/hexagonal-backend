@@ -64,6 +64,11 @@ func (uc *IntrospectTokenUseCase) Execute(ctx context.Context, q any) (any, erro
 			return &define.IntrospectResponse{Active: false}, nil
 		}
 	}
+	// Inclusive for the same reason the middleware checker is (see the comment on the
+	// matching comparison in adapter/in/revocation_checker.go): second-resolution timestamps
+	// make "signed during the reset's second" undecidable, and a password reset fails closed.
+	// The duplication is deliberate — introspection must reach the same verdict the auth
+	// middleware would, and the DRY three-use bar is not met (grant-linkage.md §9).
 	if claims.IssuedAt != nil && uc.cache != nil {
 		var invalidatedAt int64
 		found, err := uc.cache.GetErr(ctx, define.SessionsInvalidatedKey(entity.UserID(claims.Subject)), &invalidatedAt)

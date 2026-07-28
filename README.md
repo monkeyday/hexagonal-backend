@@ -278,6 +278,28 @@ k6 run smoke_test/all.js
 k6 run -e BASE_URL=http://staging:9876 smoke_test/all.js
 ```
 
+### Stress tests (`stress_test/`)
+
+k6 load suite — `token_refresh`, `userinfo`, `auth_code_flow`, `mixed`, `spike` and `soak`
+scenarios over shared helpers (`helpers.js`) and per-VU actions (`actions.js`); the scenario files
+are thin wrappers. Correctness gates (`checks`, `http_req_failed`) and per-endpoint latency
+thresholds run together, so a load run also fails on a semantic regression. See
+[`stress_test/README.md`](stress_test/README.md) for scenario details and threshold calibration.
+
+Standing rules, all of which change results if ignored:
+
+- run the server with `RATE_LIMIT_PER_MIN=0`, or the load trips the rate limiter instead of the code under test;
+- run against **Mongo + Redis**, not the file/in-memory backends — rotation needs a real transaction, and Mongo must be a replica set (a standalone silently 500s every rotate);
+- one unique user per VU (`load_user_${__VU}@example.com`); shared accounts falsely trip rotation reuse-detection and per-account lockout.
+
+Not part of the default CI run: the stress workflow is a manual `workflow_dispatch` job
+(`.github/workflows/stress.yml`).
+
+```sh
+k6 run stress_test/token_refresh.js
+k6 run -e P95_MAX=1500 stress_test/mixed.js
+```
+
 ### Browser flow (`e2e/backend_flow/`)
 
 A browser-driven smoke of the `cmd/backend` test client's UI (create user → login → userinfo → update profile → introspect → refresh → revoke → logout), complementing the curl/k6 API-level suites. `run.sh` starts the IdP (`:9876`) and `cmd/backend` (`:3000`) against an ephemeral file store, registering `my_client2` as a public PKCE client; the browser steps are then executed via the Playwright MCP browser per [`SCENARIO.md`](e2e/backend_flow/SCENARIO.md) — no Playwright npm dependency is installed.
@@ -357,14 +379,15 @@ Full OpenAPI spec: [`docs/auth.yaml`](docs/auth.yaml)
 
 ## Persistence
 
-File storage writes two files under `FILE_DIR` (default `tmp/`). It is intended for local development or single-instance deployments; use MongoDB for shared/durable storage in multi-instance environments.
+File storage writes three files under `FILE_DIR` (default `tmp/`). It is intended for local development or single-instance deployments; use MongoDB for shared/durable storage in multi-instance environments.
 
 | File | Contents |
 |---|---|
 | `user.json` | User accounts |
 | `refresh_tokens.json` | Active refresh tokens |
+| `grants.json` | Grants — one per authentication event, the unit of session revocation |
 
-Both are safe to delete to reset local state. They are created automatically on first write.
+All three are safe to delete to reset local state, and are created automatically on first write. Note the file backend runs a no-op unit of work, so it has no transactions: rotation's grant check cannot serialise against a concurrent revoke there. That is a dev-only limitation — MongoDB (replica set) is the path with real transactions.
 
 ---
 
@@ -379,7 +402,7 @@ Both are safe to delete to reset local state. They are created automatically on 
 | Redis connection errors | Server falls back to in-memory cache automatically; check logs for the warning |
 | Port already in use | Another process on `:9876` — change `PORT` in `.env` |
 | E2E script fails: `jq: command not found` | Install `jq` |
-| Stale user / token state | Delete `tmp/user.json` and `tmp/refresh_tokens.json`, then restart |
+| Stale user / token state | Delete `tmp/user.json`, `tmp/refresh_tokens.json` and `tmp/grants.json`, then restart |
 | E2E logout test returns 200 instead of 302 | `OAUTH_POST_LOGOUT_REDIRECT_ALLOWLIST` not set — add `http://localhost:3000` to the allowlist |
 
 ---

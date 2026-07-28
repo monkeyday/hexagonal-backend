@@ -17,6 +17,14 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    ClientBasicAuth:
+      type: http
+      scheme: basic
+      description: |
+        Client credentials via HTTP Basic (`client_secret_basic`). The same
+        credentials may instead be sent in the form body as `client_id` +
+        `client_secret` (`client_secret_post`), which OpenAPI cannot express as
+        a security scheme — see each operation's request body.
 
   # ─── Reusable schemas ───────────────────────────────────────────────────────
   schemas:
@@ -705,9 +713,17 @@ paths:
         Revoking an **access token** blacklists that token's `jti` only, leaving
         the rest of the session usable. An expired refresh token is accepted
         silently and revokes nothing.
+
+        Authenticate **either** as the token's owner with a bearer access token,
+        **or** as a registered client (RFC 7009 §2.1) — Basic, or `client_id` +
+        `client_secret` in the form body. A bearer caller may only revoke its own
+        tokens; a client-authenticated caller may revoke any token it presents,
+        possession being the capability. Unauthenticated calls are rejected.
       tags: [OIDC]
       security:
         - BearerAuth: []
+        - ClientBasicAuth: []
+        - {}   # client_secret_post: credentials in the form body
       requestBody:
         required: true
         content:
@@ -736,9 +752,17 @@ paths:
         Returns the active state and claims of a token.
         - Access tokens are validated as JWTs and checked against the JTI blacklist cache.
         - Opaque refresh tokens always return `active: false`; use `/oidc/revoke` to explicitly revoke them.
+        - A token that has been revoked — by `jti`, by its grant, or by a password
+          reset — reports `active: false`, matching what the auth middleware would
+          decide for the same token.
+
+        Requires an authenticated **confidential** client (RFC 7662 §2.1): Basic,
+        or `client_id` + `client_secret` in the form body. A bearer access token
+        is **not** accepted here, unlike `/oidc/revoke`.
       tags: [OIDC]
       security:
-        - BearerAuth: []
+        - ClientBasicAuth: []
+        - {}   # client_secret_post: credentials in the form body
       requestBody:
         required: true
         content:

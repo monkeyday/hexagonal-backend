@@ -42,7 +42,13 @@ func (r *revocationChecker) IsRevoked(ctx context.Context, claims *corejwt.Claim
 	if err != nil {
 		return false, err
 	}
-	// Inclusive: a token stamped in the same second as the invalidation is rejected rather
-	// than admitted (grant-linkage.md §9, clock skew).
+	// Inclusive on purpose. The marker and `iat` both carry Unix *seconds*, so within the
+	// second the reset landed in there is no way to tell whether a token was signed before
+	// or after it. A password reset is a security event, so the ambiguous case fails closed:
+	// `<` would instead keep a pre-reset token alive for up to MaxTokenExpirySecs. The cost
+	// is a sub-second window where a fresh login succeeds but its token is refused; retrying
+	// past that second works. If immediate post-reset login ever has to work, the fix is
+	// finer resolution or an explicit epoch — not relaxing this comparison
+	// (grant-linkage.md §9).
 	return found && claims.IssuedAt.Unix() <= invalidatedAt, nil
 }
