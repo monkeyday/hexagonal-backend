@@ -128,6 +128,28 @@ export default function (tokens) {
       'has access_token':  (r) => !!r.json('access_token'),
       'has refresh_token': (r) => !!r.json('refresh_token'),
     });
+
+    // Replaying the token just consumed is treated as theft: the grant is
+    // revoked, which must take its already-issued access tokens with it.
+    const replay = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type: 'refresh_token', client_id: 'smoke-client',
+        refresh_token: fresh.refresh_token,
+      }),
+      { headers: JSON_HEADERS, responseCallback: expectedStatuses(400, 401) },
+    );
+    check(replay, {
+      'replayed refresh token: rejected 4xx': (r) => r.status === 400 || r.status === 401,
+    });
+
+    const afterReplay = http.get(`${BASE_URL}/oidc/me`, {
+      headers: { Authorization: `Bearer ${fresh.access_token}` },
+      responseCallback: expectedStatuses(401),
+    });
+    check(afterReplay, {
+      'replay revokes the grant access token: status 401': (r) => r.status === 401,
+    });
   });
 
   // ── POST /token — authorization_code grant ───────────────────────────────────

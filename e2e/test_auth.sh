@@ -22,6 +22,10 @@ FAIL=0
 ACCESS_TOKEN=""
 REFRESH_TOKEN=""
 ID_TOKEN=""
+S_AT=""
+S_RT=""
+PRE_RESET_AT=""
+PRE_RESET_RT=""
 OLD_RT=""
 CODE=""
 LOCATION=""
@@ -134,6 +138,43 @@ split_resp() {
 url_decode() {
   local value="${1//+/ }"
   printf '%b' "${value//%/\\x}"
+}
+
+# Mint an independent session via the password grant, into S_AT / S_RT. Used by
+# the revocation-semantics checks so each case owns its own grant and cannot
+# disturb the main flow's tokens.
+mint_session() {
+  local pw="${1:-$PASSWORD}" resp body
+  resp=$(do_req "$BASE_URL/token" -X POST \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&email=$EMAIL&password=$pw&expire_secs=3600")
+  body=$(echo "$resp" | tail -n +2)
+  S_AT=$(json_field "$body" access_token)
+  S_RT=$(json_field "$body" refresh_token)
+}
+
+# Echo the `active` value RFC 7662 reports for a token ("true"/"false"/"").
+introspect_active() {
+  local resp
+  resp=$(do_req "$BASE_URL/oidc/introspect" -X POST \
+    -u "$CLIENT_ID:$CLIENT_SECRET" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "token=$1&token_type_hint=access_token")
+  # Not `.active // empty`: jq's // treats false the same as null, which would
+  # swallow exactly the value these checks exist to observe.
+  printf '%s' "$(echo "$resp" | tail -n +2)" |
+    jq -r 'if has("active") then (.active | tostring) else "" end' 2>/dev/null || true
+}
+
+# Assert introspection's verdict on a token.
+check_active() {
+  local label="$1" token="$2" want="$3" got
+  got=$(introspect_active "$token")
+  if [ "$got" = "$want" ]; then
+    pass "$label (active=$got)"
+  else
+    fail "$label (active=${got:-<empty>}, want $want)"
+  fi
 }
 
 # ── Server readiness ──────────────────────────────────────────────────────────
@@ -380,6 +421,53 @@ section "Verify revocation (GET /oidc/me with revoked token)"
 split_resp "$(do_req "$BASE_URL/oidc/me" -H "Authorization: Bearer $ACCESS_TOKEN")"
 check_status "GET /oidc/me after revoke → 401" "401" "$STATUS"
 
+# ── Revocation semantics ──────────────────────────────────────────────────────
+# Introspection re-implements the revocation checks the auth middleware runs
+# (query/introspect_token.go), so a token rejected at /oidc/me must also report
+# active:false here — otherwise the two paths have silently diverged. Each case
+# below mints its own session, leaving the main flow's tokens alone.
+
+section "Introspect reports a revoked token inactive (RFC 7662)"
+check_active "jti-revoked token" "$ACCESS_TOKEN" "false"
+
+section "Revoking a refresh token ends the whole grant (RFC 7009 §2.1)"
+mint_session
+if [ -n "$S_AT" ] && [ -n "$S_RT" ]; then
+  GRANT_AT="$S_AT"
+  split_resp "$(do_req "$BASE_URL/oidc/revoke" -X POST \
+    -H "Authorization: Bearer $S_AT" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "token=$S_RT")"
+  check_status "POST /oidc/revoke (refresh token)" "200" "$STATUS"
+
+  split_resp "$(do_req "$BASE_URL/oidc/me" -H "Authorization: Bearer $GRANT_AT")"
+  check_status "sibling access token rejected after grant revoke → 401" "401" "$STATUS"
+  check_active "grant-revoked sibling access token" "$GRANT_AT" "false"
+else
+  fail "grant revoke — skipped, could not mint a session"
+fi
+
+section "Revoking an access token leaves its grant alive (docs/auth.yaml §revoke)"
+mint_session
+if [ -n "$S_AT" ] && [ -n "$S_RT" ]; then
+  KEEP_RT="$S_RT"
+  split_resp "$(do_req "$BASE_URL/oidc/revoke" -X POST \
+    -H "Authorization: Bearer $S_AT" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "token=$S_AT&token_type_hint=access_token")"
+  check_status "POST /oidc/revoke (access token)" "200" "$STATUS"
+
+  # The inverse of the cascade above: blacklisting one jti must not take the
+  # session with it, or every access-token revoke would silently log the user out.
+  split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -u "$CLIENT_ID:$CLIENT_SECRET" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=refresh_token&client_id=$CLIENT_ID&refresh_token=$KEEP_RT")"
+  check_status "sibling refresh token still rotates → 200" "200" "$STATUS"
+else
+  fail "access-token revoke — skipped, could not mint a session"
+fi
+
 section "Logout (GET /oidc/logout)"
 LOGOUT_RESP=$(curl -si --max-redirs 0 --max-time 10 \
   "$BASE_URL/oidc/logout?id_token_hint=$ID_TOKEN&post_logout_redirect_uri=$POST_LOGOUT_URI&state=xyz" 2>/dev/null)
@@ -423,11 +511,38 @@ else
     fail "reset email not found in Mailpit"
   fi
 
+  # A session established before the reset, to prove the reset ends it. Minted
+  # here rather than reused from earlier: the main flow's tokens were already
+  # revoked above, which would make the assertion pass for the wrong reason.
+  mint_session
+  PRE_RESET_AT="$S_AT"
+  PRE_RESET_RT="$S_RT"
+
   if [ -n "$RESET_TOKEN" ]; then
     split_resp "$(do_req "$BASE_URL/reset-password" -X POST \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "token=$RESET_TOKEN&password=$NEW_PASSWORD")"
     check_status "POST /reset-password" "200" "$STATUS"
+  fi
+
+  # A password reset ends every session the user holds — including the stateless
+  # access tokens already issued, which outlive the refresh-token sweep.
+  if [ -n "$PRE_RESET_AT" ]; then
+    split_resp "$(do_req "$BASE_URL/oidc/me" -H "Authorization: Bearer $PRE_RESET_AT")"
+    check_status "pre-reset access token rejected → 401" "401" "$STATUS"
+    check_active "pre-reset access token" "$PRE_RESET_AT" "false"
+
+    split_resp "$(do_req "$BASE_URL/token" -X POST \
+      -u "$CLIENT_ID:$CLIENT_SECRET" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "grant_type=refresh_token&client_id=$CLIENT_ID&refresh_token=$PRE_RESET_RT")"
+    if [ "$STATUS" != "200" ]; then
+      pass "pre-reset refresh token rejected after reset (HTTP $STATUS)"
+    else
+      fail "pre-reset refresh token still rotates after reset"
+    fi
+  else
+    fail "password-reset invalidation — skipped, could not mint a pre-reset session"
   fi
 
   # Server-state cross-check — the assertion that can't pass on an echo.
