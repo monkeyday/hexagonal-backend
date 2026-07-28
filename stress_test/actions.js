@@ -36,15 +36,21 @@ export function doUserinfo(s) {
     headers: { Authorization: `Bearer ${s.accessToken}` },
     tags: { endpoint: 'userinfo' },
   });
-  if (res.status === 401) {
-    s.accessToken = null; // expired/revoked; re-mint next call
-    return;
-  }
+  // A 401 is legitimate here — the token may have expired, or a revoke action in
+  // the mixed scenario cascaded to it. It must not fail `checks: rate==1`. But
+  // returning before the checks recorded nothing at all, and a threshold over a
+  // metric with no samples passes vacuously: an iteration that only ever saw 401
+  // reported clean. So record the checks either way and exempt the re-auth case
+  // from the content assertions. A server 401ing everything is caught by
+  // `http_req_failed: rate<0.01` — this request sets no responseCallback, so k6's
+  // default 200-399 counts every 401 as a failed request.
+  const reauth = res.status === 401;
   check(res, {
-    'userinfo: status 200': (r) => r.status === 200,
-    'userinfo: has sub': (r) => !!r.json('sub'),
-    'userinfo: email matches': (r) => r.json('email') === vuEmail(),
+    'userinfo: status 200 or re-auth 401': (r) => r.status === 200 || reauth,
+    'userinfo: has sub': (r) => reauth || !!r.json('sub'),
+    'userinfo: email matches': (r) => reauth || r.json('email') === vuEmail(),
   });
+  if (reauth) s.accessToken = null; // expired/revoked; re-mint next call
 }
 
 /**

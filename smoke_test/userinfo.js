@@ -23,7 +23,11 @@ export default function (tokens) {
     '/userinfo: status 200':         (r) => r.status === 200,
     '/userinfo: has sub':            (r) => !!r.json('sub'),
     '/userinfo: email matches':      (r) => r.json('email') === EMAIL,
-    '/userinfo: email_verified':     (r) => r.json('email_verified') === true,
+    // Asserted false on purpose. There is no verification flow yet — create_user.go
+    // stamps EmailVerified: false and nothing ever sets it true — so a `true` here
+    // could only mean the claim stopped reflecting the stored value. When the
+    // verification flow lands this must flip to a verified-account fixture.
+    '/userinfo: email_verified false': (r) => r.json('email_verified') === false,
     '/userinfo: has preferred_username': (r) => !!r.json('preferred_username'),
   });
 
