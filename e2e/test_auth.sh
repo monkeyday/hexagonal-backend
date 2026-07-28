@@ -555,11 +555,12 @@ else
     fail "old password still works after reset"
   fi
 
-  # The user-level marker stores Unix *seconds* and the comparison is inclusive
-  # (`iat <= invalidatedAt`, revocation_checker.go:45-47 — deliberate, for clock
-  # skew), so a token minted inside the same second as the reset is rejected by
-  # design. Wait past that second before asserting the positive case; without
-  # this the check below flakes rather than failing honestly.
+  # The user-level marker and `iat` both carry Unix *seconds*, so within the second
+  # the reset landed in there is no way to tell whether a token was signed before
+  # or after it. That second fails closed — the comparison is inclusive on purpose
+  # (`iat <= invalidatedAt`, revocation_checker.go:53) — so a token minted inside
+  # it is rejected by design. Wait past that second before asserting the positive
+  # case; without this the check below flakes rather than failing honestly.
   sleep 1
 
   split_resp "$(do_req "$BASE_URL/token" -X POST \
