@@ -57,6 +57,22 @@ export default function (tokens) {
     'bearer-less logout revokes nothing: status 200': (r) => r.status === 200,
   });
 
+  // Both halves, for the same reason the kept-session check below needs both: a
+  // regression that swept the refresh rows without writing a grant marker would
+  // leave the access token above answering 200 while the session was gone.
+  const survivedRefresh = http.post(
+    `${BASE_URL}/token`,
+    JSON.stringify({
+      grant_type:    'refresh_token',
+      client_id:     'smoke-client',
+      refresh_token: tokens.refresh_token,
+    }),
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  check(survivedRefresh, {
+    'bearer-less logout leaves the refresh token usable: status 200': (r) => r.status === 200,
+  });
+
   // ── Per-session revocation ──────────────────────────────────────────────────
   // With a bearer, logout ends exactly the session that token belongs to
   // (grant-linkage.md §1).

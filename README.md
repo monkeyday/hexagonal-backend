@@ -399,7 +399,7 @@ All three are safe to delete to reset local state, and are created automatically
 | `failed to parse private key` | Key was generated with a passphrase — regenerate with `-N ""` |
 | `client redirect_uri not valid` | `client_id` matches no registered client (`OAUTH_CLIENT_ID` / `OAUTH_CLIENT_<n>_ID`), or `redirect_uri` is not in that client's `*_REDIRECT_URIS` |
 | `auth_session` cookie not sent to `/sign-in` | Cookie was blocked by `SameSite=Strict`; server correctly uses `SameSite=Lax` — check client |
-| Redis connection errors | Server falls back to in-memory cache automatically; check logs for the warning |
+| Redis connection errors | **Startup fails** — a configured but unreachable `REDIS_ADDR` is fatal by design (`selectCache`, `cmd/auth/dependencies/dependencies.go`), so replicas never silently split the rate limiter, JTI blacklist and auth sessions across per-process memory. In-memory is used only when `REDIS_ADDR` is unset |
 | Port already in use | Another process on `:9876` — change `PORT` in `.env` |
 | E2E script fails: `jq: command not found` | Install `jq` |
 | Stale user / token state | Delete `tmp/user.json`, `tmp/refresh_tokens.json` and `tmp/grants.json`, then restart |
@@ -441,7 +441,7 @@ Config is read from process environment variables, optionally supplemented by `c
 | `MONGO_AUTH_SOURCE` | Auth database |
 | `MONGO_DATABASE` | Target database |
 
-### Cache — Redis (optional, falls back to in-memory)
+### Cache — Redis (optional; in-memory only when unset)
 
 If `REDIS_ADDR` is unset, the server uses an in-memory cache. In-memory cache is not shared across instances, so use Redis for multi-instance deployments where authorized sessions, auth codes, token blacklist entries, and rate-limit counters must be shared.
 

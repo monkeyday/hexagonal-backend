@@ -719,11 +719,16 @@ paths:
         `client_secret` in the form body. A bearer caller may only revoke its own
         tokens; a client-authenticated caller may revoke any token it presents,
         possession being the capability. Unauthenticated calls are rejected.
+
+        The `client_secret_post` variant sends the credentials as `client_id` +
+        `client_secret` in the form body. OpenAPI's security model cannot express
+        body-carried credentials, so they appear as request-body fields below
+        rather than as a security scheme — their absence from `security` does not
+        make this endpoint anonymous.
       tags: [OIDC]
       security:
         - BearerAuth: []
         - ClientBasicAuth: []
-        - {}   # client_secret_post: credentials in the form body
       requestBody:
         required: true
         content:
@@ -737,6 +742,11 @@ paths:
                 token_type_hint:
                   type: string
                   enum: [access_token, refresh_token]
+                client_id:
+                  type: string
+                  description: Client credentials in the body (`client_secret_post`).
+                client_secret:
+                  type: string
       responses:
         '200':
           description: Token revoked (or was already invalid).
@@ -759,10 +769,14 @@ paths:
         Requires an authenticated **confidential** client (RFC 7662 §2.1): Basic,
         or `client_id` + `client_secret` in the form body. A bearer access token
         is **not** accepted here, unlike `/oidc/revoke`.
+
+        As with `/oidc/revoke`, the `client_secret_post` variant carries the
+        credentials in the form body, which OpenAPI's security model cannot
+        express; they appear as request-body fields below. This endpoint is never
+        anonymous.
       tags: [OIDC]
       security:
         - ClientBasicAuth: []
-        - {}   # client_secret_post: credentials in the form body
       requestBody:
         required: true
         content:
@@ -776,6 +790,11 @@ paths:
                 token_type_hint:
                   type: string
                   enum: [access_token, refresh_token]
+                client_id:
+                  type: string
+                  description: Client credentials in the body (`client_secret_post`).
+                client_secret:
+                  type: string
       responses:
         '200':
           description: Introspection result.

@@ -349,6 +349,21 @@ export default function (tokens) {
       'bearer-less logout revokes nothing: status 200': (r) => r.status === 200,
     });
 
+    // Both halves: a regression that swept the refresh rows without writing a
+    // grant marker would leave the access token above answering 200.
+    const survivedRefresh = http.post(
+      `${BASE_URL}/token`,
+      JSON.stringify({
+        grant_type:    'refresh_token',
+        client_id:     'smoke-client',
+        refresh_token: fresh.refresh_token,
+      }),
+      { headers: JSON_HEADERS },
+    );
+    check(survivedRefresh, {
+      'bearer-less logout leaves the refresh token usable: status 200': (r) => r.status === 200,
+    });
+
     // Logout revokes only for a caller presenting a bearer token, and only the
     // session that token belongs to (grant-linkage.md §1). Two independent
     // sessions: one is ended, the other must survive.
