@@ -2,6 +2,8 @@ package adapter
 
 import (
 	corecache "sc/core/cache"
+	"sc/core/event"
+	"sc/handler/eventbus"
 	webHandler "sc/handler/web"
 	"sc/handler/web/middleware"
 	"sc/handler/web/responder"
@@ -114,4 +116,8 @@ func grantTypeIs(gt string) func(*gin.Context) bool {
 		v, _ := ctx.Get(middleware.GrantTypeKey)
 		return v == gt
 	}
+}
+
+func (ro *Router) SubscribeEvents(s event.Subscriber) {
+	eventbus.SubscribeCommand[command.ResetPasswordCommand](s, event.EmailSent, ro.module)
 }

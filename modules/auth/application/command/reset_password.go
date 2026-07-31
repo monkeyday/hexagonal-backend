@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"sc/core/event"
 	"time"
 
 	coreerror "sc/core/error"
@@ -20,6 +21,12 @@ import (
 type ResetPasswordCommand struct {
 	Token    string `form:"token"    json:"token"    validate:"required"`
 	Password string `form:"password" json:"password" validate:"required"`
+}
+
+func (c *ResetPasswordCommand) UnmarshalEvent(evt event.Event) error {
+	c.Token = string(evt.Topic)
+	c.Password = string(evt.Topic)
+	return nil
 }
 
 type ResetPasswordUseCase struct {

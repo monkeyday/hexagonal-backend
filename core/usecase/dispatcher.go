@@ -20,14 +20,6 @@ const (
 	useCaseNotFoundCode = 11002
 )
 
-type Dispatcher interface {
-	Dispatch(ctx context.Context, cmd any) (any, error)
-}
-
-type UseCase interface {
-	Execute(ctx context.Context, cmd any) (any, error)
-}
-
 type Registry struct {
 	useCases map[reflect.Type]UseCase
 }
@@ -67,7 +59,7 @@ func (r *Registry) Dispatch(ctx context.Context, cmd any) (result any, err error
 
 func (r *Registry) find(cmd any) (UseCase, error) {
 	t := reflect.TypeOf(cmd)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	uc, ok := r.useCases[t]

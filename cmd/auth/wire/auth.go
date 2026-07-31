@@ -14,7 +14,11 @@ import (
 )
 
 func Auth(cfg *config.Settings, deps dependencies.Deps) *auth.Module {
-	return auth.NewModule(buildAuthDeps(cfg, deps))
+	m := auth.NewModule(buildAuthDeps(cfg, deps))
+	// Subscriber is a driving port, so it is handed in here rather than carried
+	// on define.Dependencies — the same way RegisterRoutes receives the engine.
+	m.SubscribeEvents(deps.EventBus)
+	return m
 }
 
 func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependencies {
@@ -80,6 +84,7 @@ func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependen
 		ClientRegistry:              buildClientRegistry(cfg.OAuth.Clients),
 		PostLogoutRedirectAllowlist: cfg.OAuth.PostLogoutRedirectAllowlist,
 		ScopeAllowlist:              cfg.OAuth.ScopeAllowlist,
+		EventPublisher:              deps.EventBus,
 	}
 }
 

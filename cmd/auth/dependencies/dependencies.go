@@ -7,6 +7,7 @@ import (
 	corecache "sc/core/cache"
 	crypto "sc/core/crypto"
 	"sc/core/uow"
+	"sc/handler/eventbus"
 	"sc/infrastructure/cache"
 	"sc/infrastructure/jwt"
 	filerepo "sc/infrastructure/repository/file"
@@ -27,10 +28,14 @@ type Deps struct {
 	GrantStore        *filerepo.FileStore
 	SMTPClient        *infrasmtp.Client
 	EmailCipher       *crypto.Cipher
+	// EventBus is held as the concrete type because the composition root needs
+	// both of its ports: Publisher goes into the module's dependencies, while
+	// Subscriber is handed to the module's inbound adapter at wiring time.
+	EventBus *eventbus.InMemory
 }
 
 func NewDeps(cfg *config.Settings) Deps {
-	deps := Deps{Config: cfg}
+	deps := Deps{Config: cfg, EventBus: eventbus.New()}
 	jwtSvc, err := jwt.NewJWTService(cfg.JWT)
 	if err != nil {
 		log.Err(err).Msg("Failed to initialize JWT service")
