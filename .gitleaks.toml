@@ -1,0 +1,25 @@
+# gitleaks configuration.
+#
+# This file exists only to record reviewed false positives. The full default
+# ruleset stays active via [extend] — never drop useDefault, or every built-in
+# rule is switched off and the CI secrets job (ci.yml) passes vacuously.
+#
+# Allowlist entries are content-based on purpose: `gitleaks detect --source .`
+# scans git history, and PRs land on main as squash commits, so anything keyed
+# to a commit SHA (a .gitleaksignore fingerprint) goes stale the moment a branch
+# is merged and the finding reappears under the new SHA.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+e2e/test_auth.sh probes the invalid_client path by sending a deliberately wrong
+client secret to /token. The literal is the assertion itself, not a credential:
+the test passes only when the server rejects it with 401 plus a WWW-Authenticate
+challenge. Scoped to one file, one rule and one literal so that a real secret in
+a curl -u anywhere still fails the scan.
+"""
+targetRules = ["curl-auth-user"]
+paths = ['''^e2e/test_auth\.sh$''']
+regexes = ['''wrong-secret''']
