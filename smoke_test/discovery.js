@@ -28,7 +28,13 @@ const REQUIRED_FIELDS = [
 export default function () {
   const res = http.get(`${BASE_URL}/.well-known/openid-configuration`);
 
-  check(res, { 'status 200': (r) => r.status === 200 });
+  check(res, {
+    'status 200': (r) => r.status === 200,
+    // CachePublic(discoveryCacheTTL) on the route (router.go:64) overrides the
+    // default no-store; the middleware itself is unit-tested, the wiring is not.
+    'Cache-Control is public, max-age=300': (r) =>
+      (r.headers['Cache-Control'] || '') === 'public, max-age=300',
+  });
 
   const doc = res.json() || {};
   for (const field of REQUIRED_FIELDS) {
