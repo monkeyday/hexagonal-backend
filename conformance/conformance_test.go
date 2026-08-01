@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,6 +209,61 @@ func TestOIDCConformance(t *testing.T) {
 			t.Errorf("missing-PKCE error = %q, want invalid_request", loc2.Query().Get("error"))
 		}
 	})
+}
+
+// TestRateLimitExceeded asserts the 429 that docs/auth.yaml documents on
+// POST /sign-in (:352) and POST /token (:635). Only the cache-error fail-closed
+// path was covered before (handler/web/middleware/rate_limit_test.go:93-108);
+// nothing asserted the ordinary limit-exceeded response on the wire.
+//
+// The limiter sits on the root engine and aborts before the handler, so the
+// request bodies below stay deliberately invalid: no fixture is needed, and the
+// assertion cannot be perturbed by setup traffic spending the same IP budget.
+func TestRateLimitExceeded(t *testing.T) {
+	const (
+		limit          = 2
+		wantMsg        = "too many requests"
+		wantContentTyp = "application/json"
+	)
+
+	cases := []struct {
+		name string
+		path string
+		form url.Values
+	}{
+		{name: "sign-in", path: "/sign-in", form: url.Values{"email": {testUserEmail}}},
+		{name: "token", path: "/token", form: url.Values{"grant_type": {"authorization_code"}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// One harness per case: the budget is per client IP and every request
+			// in this package comes from 127.0.0.1.
+			h := newHarnessWithRateLimit(t, limit)
+
+			// Requests within the limit must fail on their own merits, never with
+			// 429 — otherwise the assertion below would prove nothing.
+			for i := range limit {
+				res := h.postForm(t, tc.path, tc.form)
+				res.Body.Close()
+				if res.StatusCode == http.StatusTooManyRequests {
+					t.Fatalf("request %d of %d within the limit was rate limited", i+1, limit)
+				}
+			}
+
+			res := h.postForm(t, tc.path, tc.form)
+			if res.StatusCode != http.StatusTooManyRequests {
+				res.Body.Close()
+				t.Fatalf("request %d status = %d, want 429", limit+1, res.StatusCode)
+			}
+			if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, wantContentTyp) {
+				t.Errorf("Content-Type = %q, want %s", ct, wantContentTyp)
+			}
+			if got := decodeJSON(t, res)["msg"]; got != wantMsg {
+				t.Errorf("msg = %v, want %q", got, wantMsg)
+			}
+		})
+	}
 }
 
 // ── assertion + crypto helpers ───────────────────────────────────────────────

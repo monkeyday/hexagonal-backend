@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sc/assets"
 	coreuow "sc/core/uow"
@@ -46,6 +47,13 @@ const (
 	testUserEmail   = "conformance@example.com"
 	testUserPass    = "Passw0rd123!"
 	testScope       = "openid email"
+
+	// rateLimitWindow is far longer than any run of this suite, so a rate-limit
+	// assertion can never race the window rolling over and resetting the count.
+	rateLimitWindow = time.Minute
+	// noRateLimit leaves the limiter unregistered, matching
+	// handler/web/handler.go:79, which only installs it when the limit is > 0.
+	noRateLimit int64 = 0
 )
 
 // harness is a running in-process provider plus the handles tests need to drive
@@ -58,6 +66,15 @@ type harness struct {
 }
 
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithRateLimit(t, noRateLimit)
+}
+
+// newHarnessWithRateLimit boots a provider whose global rate limiter allows
+// rateLimitPerMin requests per rateLimitWindow per client IP. Every request in
+// this package originates from 127.0.0.1, so one budget covers a harness's
+// entire run — a rate-limit case therefore needs a harness of its own.
+func newHarnessWithRateLimit(t *testing.T, rateLimitPerMin int64) *harness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -72,7 +89,7 @@ func newHarness(t *testing.T) *harness {
 	cache := infracache.NewMemoryCache()
 	t.Cleanup(cache.Close)
 
-	engine := buildEngine(t, issuer, cache)
+	engine := buildEngine(t, issuer, cache, rateLimitPerMin)
 	srv := &httptest.Server{Listener: ln, Config: &http.Server{Handler: engine}}
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -87,7 +104,7 @@ func newHarness(t *testing.T) *harness {
 	}
 }
 
-func buildEngine(t *testing.T, issuer string, cache *infracache.MemoryCache) *gin.Engine {
+func buildEngine(t *testing.T, issuer string, cache *infracache.MemoryCache, rateLimitPerMin int64) *gin.Engine {
 	t.Helper()
 
 	jwtSvc := newJWTService(t, issuer)
@@ -150,6 +167,11 @@ func buildEngine(t *testing.T, issuer string, cache *infracache.MemoryCache) *gi
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.SecurityHeaders())
 	engine.Use(middleware.CookieSecure(false))
+	// Last in the chain and only when positive, mirroring the production
+	// registration in handler/web/handler.go:79-81.
+	if rateLimitPerMin > 0 {
+		engine.Use(middleware.DistributedRateLimit(cache, rateLimitPerMin, rateLimitWindow))
+	}
 	as := &assets.EmbedAssets{}
 	engine.SetHTMLTemplate(template.Must(template.ParseFS(as.GetTemplates(), "*.html")))
 	mod.RegisterRoutes(engine)
