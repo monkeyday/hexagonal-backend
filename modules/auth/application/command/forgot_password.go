@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corecache "sc/core/cache"
+	coreuow "sc/core/uow"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
@@ -30,6 +31,7 @@ type ForgotPasswordUseCase struct {
 	userRepo    port.UserRepository
 	emailSender port.EmailSender
 	cache       corecache.Cache
+	uow         coreuow.UnitOfWork
 }
 
 func NewForgotPasswordUseCase(deps define.Dependencies) usecase.UseCase {
@@ -37,6 +39,7 @@ func NewForgotPasswordUseCase(deps define.Dependencies) usecase.UseCase {
 		userRepo:    deps.UserRepo,
 		emailSender: deps.EmailSender,
 		cache:       deps.Cache,
+		uow:         deps.UoW,
 	}
 }
 
@@ -63,10 +66,7 @@ func (uc *ForgotPasswordUseCase) Execute(ctx context.Context, cmd any) (any, err
 
 	updated := *user
 	updated.SetPasswordResetToken(token, entity.PasswordResetTokenTTL)
-	// TODO(WS11): replace with a transactional outbox — save the reset token and an
-	// outbox message atomically so they succeed and fail together; a relay/worker then
-	// delivers the email. Deferred to the WS11 task module (Redis queue + worker).
-	if err := uc.userRepo.Save(ctx, &updated); err != nil {
+	if err := uc.persistResetToken(ctx, &updated); err != nil {
 		log.Error().Err(err).Msg("forgot_password: failed to save reset token")
 		return nil, nil
 	}
@@ -78,6 +78,21 @@ func (uc *ForgotPasswordUseCase) Execute(ctx context.Context, cmd any) (any, err
 	}
 
 	return nil, nil
+}
+
+// persistResetToken saves the token inside a unit of work. The transaction is
+// not needed for this single write — it exists for what joins it next: the
+// outbox row carrying the reset email must be written in the same transaction
+// as the token, so neither can exist without the other (docs/outbox-module.md).
+//
+// The email send deliberately stays outside. It is not a database write, so a
+// rollback cannot recall it, and WithTransaction re-runs its whole callback on
+// a transient error — which would send the mail again on every attempt.
+func (uc *ForgotPasswordUseCase) persistResetToken(ctx context.Context, user *entity.User) error {
+	_, err := uc.uow.Do(ctx, func(txCtx context.Context) (any, error) {
+		return nil, uc.userRepo.Save(txCtx, user)
+	})
+	return err
 }
 
 // rateLimited reports whether this email has exceeded the reset-request cap in

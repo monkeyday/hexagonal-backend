@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	coreerror "sc/core/error"
+	coreuow "sc/core/uow"
 	"sc/core/usecase"
 	"sc/modules/auth/application/define"
 	"sc/modules/auth/domain/entity"
@@ -11,6 +12,14 @@ import (
 	"sc/modules/auth/port"
 	"testing"
 )
+
+// refusingUoW returns an error without ever running its closure, so anything
+// that still took effect was never inside the transaction.
+type refusingUoW struct{}
+
+func (m *refusingUoW) Do(context.Context, func(context.Context) (any, error)) (any, error) {
+	return nil, errors.New("unit of work refused to run")
+}
 
 func TestForgotPasswordUseCase(t *testing.T) {
 	ctx := context.Background()
@@ -20,6 +29,7 @@ func TestForgotPasswordUseCase(t *testing.T) {
 		mod.Register(ForgotPasswordCommand{}, NewForgotPasswordUseCase(define.Dependencies{
 			UserRepo:    repo,
 			EmailSender: sender,
+			UoW:         &mockUoW{},
 		}))
 		return mod
 	}
@@ -145,6 +155,32 @@ func TestForgotPasswordUseCase(t *testing.T) {
 		})
 	}
 
+	t.Run("the reset token is saved inside the unit of work", func(t *testing.T) {
+		// The transaction is what the outbox row will join later
+		// (docs/outbox-module.md). A bare Save satisfies every other assertion
+		// in this file, so without the refusing half of this pair nothing would
+		// stop the atomicity being quietly removed again.
+		stored := func(uow coreuow.UnitOfWork) bool {
+			repo := newMockRepo(newTestUser())
+			mod := usecase.NewRegistry()
+			mod.Register(ForgotPasswordCommand{}, NewForgotPasswordUseCase(define.Dependencies{
+				UserRepo: repo, EmailSender: &mockEmailSender{}, UoW: uow,
+			}))
+			if _, err := mod.Dispatch(ctx, &ForgotPasswordCommand{Email: "test@example.com"}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			user, _ := repo.FindByEmail(ctx, entity.DefaultTenantID, "test@example.com")
+			return user != nil && user.PasswordResetTokenHash != nil
+		}
+
+		if !stored(&mockUoW{}) {
+			t.Error("token not stored when the unit of work runs its closure")
+		}
+		if stored(&refusingUoW{}) {
+			t.Error("token stored although the closure never ran — the save is outside the transaction")
+		}
+	})
+
 	t.Run("save error — original user not mutated in-memory", func(t *testing.T) {
 		original := newTestUser()
 		repo := &mockUserRepo{
@@ -183,7 +219,7 @@ func TestForgotPasswordUseCase(t *testing.T) {
 		send := func(sender *mockEmailSender) {
 			mod := usecase.NewRegistry()
 			mod.Register(ForgotPasswordCommand{}, NewForgotPasswordUseCase(define.Dependencies{
-				UserRepo: repo, EmailSender: sender, Cache: cache,
+				UserRepo: repo, EmailSender: sender, Cache: cache, UoW: &mockUoW{},
 			}))
 			if _, err := mod.Dispatch(ctx, &ForgotPasswordCommand{Email: email}); err != nil {
 				t.Fatalf("unexpected error: %v", err)
