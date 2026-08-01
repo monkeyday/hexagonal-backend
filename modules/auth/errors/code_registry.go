@@ -23,6 +23,7 @@ var codeRegistry = map[coreerror.ErrCode]codeInfo{
 	UnsupportedScope:           {http.StatusBadRequest, web.OAuth2InvalidScope},
 	MaxLoginAttemptsExceeded:   {http.StatusBadRequest, web.OAuth2InvalidGrant},
 	AuthCodeNotFound:           {http.StatusBadRequest, web.OAuth2InvalidGrant},
+	InvalidGrant:               {http.StatusBadRequest, web.OAuth2InvalidGrant},
 	InvalidToken:               {http.StatusUnauthorized, web.OAuth2InvalidGrant},
 	InvalidRefreshToken:        {http.StatusUnauthorized, web.OAuth2InvalidGrant},
 	InvalidEmailOrPassword:     {http.StatusUnauthorized, web.OAuth2InvalidGrant},

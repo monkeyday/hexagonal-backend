@@ -27,6 +27,7 @@ const (
 	InvalidAuthRequest         coreerror.ErrCode = 10021
 	ResetPasswordFailed        coreerror.ErrCode = 10022
 	InvalidClient              coreerror.ErrCode = 10023
+	InvalidGrant               coreerror.ErrCode = 10024
 )
 
 func NewErrInvalidEmailOrPassword() *coreerror.ErrorStruct {
@@ -101,8 +102,15 @@ func NewErrInvalidAuthRequest() *coreerror.ErrorStruct {
 	return coreerror.NewMsg(InvalidAuthRequest, "invalid authorization request")
 }
 
+// NewErrInvalidGrant covers a presented grant that fails validation: a PKCE
+// verifier that does not match the challenge, a redirect_uri that does not match
+// the one the code was issued for, or a public client's code carrying no
+// challenge at all. RFC 6749 §5.2 calls for invalid_grant, so this carries its
+// own code rather than reusing InvalidArguments — which maps to invalid_request.
+// The message is deliberately uniform across the three: which check failed must
+// not be an oracle.
 func NewErrInvalidGrant() *coreerror.ErrorStruct {
-	return coreerror.NewMsg(InvalidArguments, "invalid_grant")
+	return coreerror.NewMsg(InvalidGrant, "invalid grant")
 }
 
 func NewErrInvalidClient() *coreerror.ErrorStruct {
