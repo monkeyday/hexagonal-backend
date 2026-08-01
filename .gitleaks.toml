@@ -8,6 +8,14 @@
 # scans git history, and PRs land on main as squash commits, so anything keyed
 # to a commit SHA (a .gitleaksignore fingerprint) goes stale the moment a branch
 # is merged and the finding reappears under the new SHA.
+#
+# Every allowlist below MUST carry `condition = "AND"`. The default is OR, under
+# which each of paths/regexes/targetRules allows a finding on its own — the
+# regex alone would then allow that literal anywhere in the repo, and the path
+# alone would allow *any* credential in that file. Note this cannot be checked
+# with `--no-git`: that mode matches `paths` against absolute paths, so an
+# anchored pattern silently never matches and OR looks like AND. Verify in git
+# mode, the way CI runs it.
 
 [extend]
 useDefault = true
@@ -20,6 +28,7 @@ the test passes only when the server rejects it with 401 plus a WWW-Authenticate
 challenge. Scoped to one file, one rule and one literal so that a real secret in
 a curl -u anywhere still fails the scan.
 """
+condition = "AND"
 targetRules = ["curl-auth-user"]
 paths = ['''^e2e/test_auth\.sh$''']
 regexes = ['''wrong-secret''']
