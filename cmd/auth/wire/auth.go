@@ -14,11 +14,7 @@ import (
 )
 
 func Auth(cfg *config.Settings, deps dependencies.Deps) *auth.Module {
-	m := auth.NewModule(buildAuthDeps(cfg, deps))
-	// Subscriber is a driving port, so it is handed in here rather than carried
-	// on define.Dependencies — the same way RegisterRoutes receives the engine.
-	m.SubscribeEvents(deps.EventBus)
-	return m
+	return auth.NewModule(buildAuthDeps(cfg, deps))
 }
 
 func buildAuthDeps(cfg *config.Settings, deps dependencies.Deps) define.Dependencies {

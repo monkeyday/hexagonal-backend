@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	coreerror "sc/core/error"
-	"sc/core/event"
 	coremetrics "sc/core/metrics"
 	"sc/core/usecase"
 	adapter "sc/modules/auth/adapter/in"
@@ -93,8 +92,4 @@ func (m *Module) registerUseCases(deps define.Dependencies) {
 	m.Register(query.GetProfileQuery{}, query.NewGetProfileUseCase(deps))
 	m.Register(query.GetJWKSQuery{}, query.NewGetJWKSUseCase(deps))
 	m.Register(query.IntrospectTokenQuery{}, query.NewIntrospectTokenUseCase(deps))
-}
-
-func (m *Module) SubscribeEvents(s event.Subscriber) {
-	m.router.SubscribeEvents(s)
 }
