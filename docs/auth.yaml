@@ -824,7 +824,11 @@ paths:
           in: query
           schema:
             type: string
-          description: ID token previously issued to the client.
+          description: |
+            **Accepted but ignored.** ID token previously issued to the client.
+            The server neither parses nor validates it — revocation is driven
+            solely by the bearer access token (see the description above), so a
+            hint alone must never end a session. Sending it is not an error.
         - name: post_logout_redirect_uri
           in: query
           schema:
@@ -835,6 +839,11 @@ paths:
           in: query
           schema:
             type: string
+          description: |
+            **Accepted but ignored.** OIDC RP-Initiated Logout 1.0 §2 requires an
+            OP to echo this value onto `post_logout_redirect_uri` when the RP
+            sends it; this server does not echo it. Tracked as a WS10
+            conformance gap.
       responses:
         '302':
           description: Redirect to `post_logout_redirect_uri` (only when URI is present and allowlisted).
