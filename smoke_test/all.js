@@ -127,6 +127,8 @@ export default function (tokens) {
       'status 200':        (r) => r.status === 200,
       'has access_token':  (r) => !!r.json('access_token'),
       'has refresh_token': (r) => !!r.json('refresh_token'),
+      // Presence alone passes against a server that hands the same token back.
+      'refresh token rotated': (r) => r.json('refresh_token') !== fresh.refresh_token,
     });
 
     // Replaying the token just consumed is treated as theft: the grant is
