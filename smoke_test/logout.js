@@ -11,6 +11,12 @@ export const options = smokeOptions;
 
 const POST_LOGOUT_URI = 'https://app.example.com/logged-out';
 
+/** True when the response carries a Set-Cookie that expires refresh_token. */
+function clearsRefreshCookie(res) {
+  const header = res.headers['Set-Cookie'] || res.headers['set-cookie'] || '';
+  return header.includes('refresh_token=') && header.includes('Max-Age=0');
+}
+
 export function setup() {
   ensureUser();
   return getTokens();
@@ -28,6 +34,11 @@ export default function (tokens) {
     'with hint: status 302':              (r) => r.status === 302,
     'with hint: Location is redirect URI': (r) =>
       (r.headers['Location'] || '').startsWith(POST_LOGOUT_URI),
+    // LogoutResponse.Cookies() clears refresh_token with MaxAge -1
+    // (define/response.go:85-87); net/http renders a negative MaxAge as
+    // "Max-Age=0", not "Max-Age=-1". Asserted on the redirect branch as well as
+    // the 200 below because docs/auth.yaml documents the clear on both.
+    'with hint: clears refresh_token cookie': (r) => clearsRefreshCookie(r),
   });
 
   // ── Without id_token_hint, with redirect URI ─────────────────────────────────
@@ -44,7 +55,8 @@ export default function (tokens) {
   // ── Without redirect URI — expects 200 ──────────────────────────────────────
   const noURI = http.get(`${BASE_URL}/oidc/logout`, { redirects: 0 });
   check(noURI, {
-    'no redirect URI: status 200': (r) => r.status === 200,
+    'no redirect URI: status 200':                  (r) => r.status === 200,
+    'no redirect URI: clears refresh_token cookie': (r) => clearsRefreshCookie(r),
   });
 
   // None of the calls above carried a bearer, so none of them may have revoked

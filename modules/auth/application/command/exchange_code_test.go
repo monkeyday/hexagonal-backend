@@ -127,13 +127,13 @@ func TestExchangeCodeUseCase(t *testing.T) {
 			cmd:         &ExchangeCodeCommand{Code: "pub-pkce-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://app.example.com/callback", CodeVerifier: "verifier-123"},
 			jwtSvc:      &mockJwtService{},
 			extraCodes:  []*entity.AuthCode{newPublicPKCECode(user.ID)},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name:        "redirect_uri mismatch returns error",
 			cmd:         &ExchangeCodeCommand{Code: "valid-code", ClientID: "client-123", ClientSecret: testClientSecret, RedirectURI: "https://evil.example.com/callback"},
 			jwtSvc:      &mockJwtService{},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name:             "user not found — raw error returned",
@@ -217,7 +217,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 					ExpiresAt:           time.Now().Add(entity.AuthCodeTTL),
 				},
 			},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name: "PKCE challenge present but verifier omitted",
@@ -240,7 +240,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 					ExpiresAt:           time.Now().Add(entity.AuthCodeTTL),
 				},
 			},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name: "invalid code verifier for PKCE fails",
@@ -264,7 +264,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 					ExpiresAt:           time.Now().Add(entity.AuthCodeTTL),
 				},
 			},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name:        "confidential client with wrong secret — invalid_client",
@@ -343,7 +343,7 @@ func TestExchangeCodeUseCase(t *testing.T) {
 					ExpiresAt:   time.Now().Add(entity.AuthCodeTTL),
 				},
 			},
-			wantErrCode: autherrors.InvalidArguments,
+			wantErrCode: autherrors.InvalidGrant,
 		},
 		{
 			name:        "client not allowed to use authorization_code grant — invalid_client",

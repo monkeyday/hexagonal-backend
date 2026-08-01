@@ -255,7 +255,7 @@ go test ./conformance/ -run TestOIDCConformance -v
 
 ### E2E tests (`e2e/test_auth.sh`)
 
-Shell script that exercises the full server over HTTP: sign-up, internal/trusted-client password grant, Authorization Code Flow (CSRF, state, nonce), refresh, introspect, revoke, logout.
+Shell script that exercises the full server over HTTP: sign-up, internal/trusted-client password grant, Authorization Code Flow (CSRF, state, nonce), refresh, introspect, revoke, logout, and the forgot-password/reset round-trip via Mailpit. It also asserts the error paths the k6 smoke suite cannot reach, because they need the confidential client (`invalid_client`) or a real reset token (weak-password 400).
 
 ```sh
 # Server already running (CI / remote / Docker)

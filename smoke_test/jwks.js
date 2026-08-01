@@ -16,6 +16,9 @@ export default function () {
     'status 200':          (r) => r.status === 200,
     'has keys array':      (r) => Array.isArray(r.json('keys')),
     'at least one key':    (r) => (r.json('keys') || []).length > 0,
+    // CachePublic(discoveryCacheTTL) on the route (router.go:65).
+    'Cache-Control is public, max-age=300': (r) =>
+      (r.headers['Cache-Control'] || '') === 'public, max-age=300',
   });
 
   const keys = res.json('keys') || [];

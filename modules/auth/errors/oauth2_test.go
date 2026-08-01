@@ -17,6 +17,7 @@ func TestOAuth2CodeFor(t *testing.T) {
 		{"invalid refresh token", InvalidRefreshToken, web.OAuth2InvalidGrant},
 		{"invalid email or password", InvalidEmailOrPassword, web.OAuth2InvalidGrant},
 		{"max login attempts", MaxLoginAttemptsExceeded, web.OAuth2InvalidGrant},
+		{"invalid grant", InvalidGrant, web.OAuth2InvalidGrant},
 		{"unsupported grant type", UnsupportedGrantType, web.OAuth2UnsupportedGrantType},
 		{"unsupported response type", UnsupportedResponseType, web.OAuth2UnsupportedResponseType},
 		{"unsupported scope", UnsupportedScope, web.OAuth2InvalidScope},

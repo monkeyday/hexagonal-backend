@@ -22,6 +22,7 @@ func TestHTTPStatusMapper(t *testing.T) {
 		{"max login attempts exceeded", autherrors.MaxLoginAttemptsExceeded, http.StatusBadRequest},
 		{"invalid auth request", autherrors.InvalidAuthRequest, http.StatusBadRequest},
 		{"auth code not found", autherrors.AuthCodeNotFound, http.StatusBadRequest},
+		{"invalid grant", autherrors.InvalidGrant, http.StatusBadRequest},
 		{"invalid token", autherrors.InvalidToken, http.StatusUnauthorized},
 		{"invalid refresh token", autherrors.InvalidRefreshToken, http.StatusUnauthorized},
 		{"invalid email or password", autherrors.InvalidEmailOrPassword, http.StatusUnauthorized},
