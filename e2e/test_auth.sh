@@ -314,6 +314,34 @@ fi
 
 section "OIDC code flow — exchange code"
 if [ -n "$CODE" ]; then
+  # Client auth runs before the code is consumed (exchange_code.go:53-66), so
+  # neither wrong-secret probe burns $CODE — the real exchange follows below and
+  # its 200 is what proves the code survived. Do not reorder.
+  # Unreachable from smoke: that client is public, so Authenticate never fails.
+  split_resp "$(do_req "$BASE_URL/token" -X POST \
+    -u "$CLIENT_ID:wrong-secret" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=authorization_code&code=$CODE&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&code_verifier=$CODE_VERIFIER")"
+  check_status "POST /token (wrong client secret) → 401" "401" "$STATUS"
+  check_field  "invalid_client error" "$BODY" "error" "invalid_client"
+
+  # RFC 6749 §5.2: a 401 rejecting credentials sent in the Authorization header
+  # must carry a WWW-Authenticate challenge (http_responder.go:190). Sent as a
+  # second, identical probe because do_req writes the body out with -o/-w and
+  # discards headers — the challenge is only readable from a raw -i response.
+  INVALID_CLIENT_RESP=$(curl -si --max-time 10 -X POST \
+    -u "$CLIENT_ID:wrong-secret" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=authorization_code&code=$CODE&client_id=$CLIENT_ID&redirect_uri=$REDIRECT_URI&code_verifier=$CODE_VERIFIER" \
+    "$BASE_URL/token" 2>/dev/null)
+  if printf '%s' "$INVALID_CLIENT_RESP" | grep -qi '^www-authenticate:.*realm="oauth2"'; then
+    pass "invalid_client carries WWW-Authenticate: Basic realm=\"oauth2\""
+  else
+    # Report the status line too: an empty one means curl never reached the
+    # server, which is a transport failure rather than a missing header.
+    fail "invalid_client missing WWW-Authenticate challenge (status line: $(printf '%s' "$INVALID_CLIENT_RESP" | head -1 | tr -d '\r'))"
+  fi
+
   split_resp "$(do_req "$BASE_URL/token" -X POST \
     -u "$CLIENT_ID:$CLIENT_SECRET" \
     -H "Content-Type: application/x-www-form-urlencoded" \
@@ -519,6 +547,15 @@ else
   PRE_RESET_RT="$S_RT"
 
   if [ -n "$RESET_TOKEN" ]; then
+    # SetPassword rejects before ClearPasswordResetToken (reset_password.go:51,57)
+    # and mutates nothing on failure, so the token stays usable for the real reset
+    # below. Unreachable from smoke: a real reset token needs Mailpit.
+    split_resp "$(do_req "$BASE_URL/reset-password" -X POST \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "token=$RESET_TOKEN&password=weak")"
+    check_status "POST /reset-password (weak password) → 400" "400" "$STATUS"
+    check_field  "weak password" "$BODY" "err_code" "10017"
+
     split_resp "$(do_req "$BASE_URL/reset-password" -X POST \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "token=$RESET_TOKEN&password=$NEW_PASSWORD")"
